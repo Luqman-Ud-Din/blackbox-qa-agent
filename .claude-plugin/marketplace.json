@@ -1,0 +1,13 @@
+{
+  "name": "blackbox-qa-agent",
+  "owner": {
+    "name": "Luqman-Ud-Din"
+  },
+  "plugins": [
+    {
+      "name": "argus-qa",
+      "source": ".",
+      "description": "Argus — Autonomous UI Auditor. Crawls every route, viewport and browser. Detects layout, accessibility, form, network and console issues. Files bug tickets automatically."
+    }
+  ]
+}
