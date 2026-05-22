@@ -1,0 +1,10 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["doubleSubmitAllowed", "duplicateCreated"],
+  "severity": {
+    "doubleSubmitAllowed": "high",
+    "duplicateCreated": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

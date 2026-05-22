@@ -1,0 +1,12 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["loginFailed", "logoutBroken", "protectedRouteExposed", "authErrorNotShown"],
+  "severity": {
+    "loginFailed": "high",
+    "logoutBroken": "high",
+    "protectedRouteExposed": "high",
+    "authErrorNotShown": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

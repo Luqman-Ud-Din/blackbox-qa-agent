@@ -1,0 +1,10 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["languageSwitchNoEffect", "untranslatedKeys"],
+  "severity": {
+    "languageSwitchNoEffect": "medium",
+    "untranslatedKeys": "medium"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

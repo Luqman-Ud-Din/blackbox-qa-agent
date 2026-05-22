@@ -1,0 +1,12 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["emptyStateAbsent", "errorStateAbsent", "loadingStateAbsent", "successFeedbackAbsent"],
+  "severity": {
+    "emptyStateAbsent": "medium",
+    "errorStateAbsent": "medium",
+    "loadingStateAbsent": "medium",
+    "successFeedbackAbsent": "medium"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

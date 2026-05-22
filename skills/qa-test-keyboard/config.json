@@ -1,0 +1,12 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["keyboardTrap", "focusNotVisible", "enterKeyNoEffect", "escapeKeyNoEffect"],
+  "severity": {
+    "keyboardTrap": "high",
+    "focusNotVisible": "medium",
+    "enterKeyNoEffect": "medium",
+    "escapeKeyNoEffect": "medium"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

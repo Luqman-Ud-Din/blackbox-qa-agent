@@ -1,0 +1,11 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["backBroken", "forwardBroken", "deepLinkBroken"],
+  "severity": {
+    "backBroken": "high",
+    "forwardBroken": "high",
+    "deepLinkBroken": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

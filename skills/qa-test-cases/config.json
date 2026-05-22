@@ -1,0 +1,11 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["testCaseFailed", "testCaseError"],
+  "severity": {
+    "testCaseFailed": "high",
+    "testCaseError": "high"
+  },
+  "applyOn": ["desktop"],
+  "testCasesFile": ".claude/qa-test-cases.md",
+  "enabled": true
+}

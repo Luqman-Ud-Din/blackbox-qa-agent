@@ -1,0 +1,12 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["searchNoEffect", "filterNoEffect", "sortNoEffect", "paginationBroken"],
+  "severity": {
+    "searchNoEffect": "high",
+    "filterNoEffect": "high",
+    "sortNoEffect": "high",
+    "paginationBroken": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

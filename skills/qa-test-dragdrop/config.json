@@ -1,0 +1,10 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["dragDropBroken", "dragDropJsError"],
+  "severity": {
+    "dragDropBroken": "high",
+    "dragDropJsError": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

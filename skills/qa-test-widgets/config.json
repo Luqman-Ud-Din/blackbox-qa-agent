@@ -1,0 +1,13 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["modalWontOpen", "modalWontClose", "dropdownBroken", "datePickerBroken", "actionMenuBroken"],
+  "severity": {
+    "modalWontOpen": "high",
+    "modalWontClose": "high",
+    "dropdownBroken": "high",
+    "datePickerBroken": "medium",
+    "actionMenuBroken": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

@@ -1,0 +1,12 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["navLinkBroken", "navItemDead", "tabSwitchNoEffect", "routeRedirectBroken"],
+  "severity": {
+    "navLinkBroken": "high",
+    "navItemDead": "medium",
+    "tabSwitchNoEffect": "high",
+    "routeRedirectBroken": "high"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}

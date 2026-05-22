@@ -1,0 +1,10 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["themeToggleNoEffect", "themeNotPersisted"],
+  "severity": {
+    "themeToggleNoEffect": "low",
+    "themeNotPersisted": "low"
+  },
+  "applyOn": ["desktop"],
+  "enabled": true
+}
