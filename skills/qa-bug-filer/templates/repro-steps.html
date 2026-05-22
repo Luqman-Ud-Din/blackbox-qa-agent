@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h3>Issue: {{ISSUE_TYPE}}</h3>
+<table>
+  <tr><td><strong>Skill</strong></td><td>{{SKILL}}</td></tr>
+  <tr><td><strong>Severity</strong></td><td>{{SEVERITY}}</td></tr>
+  <tr><td><strong>Route</strong></td><td>{{ROUTE}}</td></tr>
+  <tr><td><strong>Viewport</strong></td><td>{{VIEWPORT}}</td></tr>
+  <tr><td><strong>Browser</strong></td><td>{{BROWSER}}</td></tr>
+  <tr><td><strong>Run ID</strong></td><td>{{RUN_ID}}</td></tr>
+</table>
+
+<h3>Description</h3>
+<p>{{DESCRIPTION}}</p>
+
+<h3>Steps to Reproduce</h3>
+<ol>
+  <li>Open {{ROUTE}} in {{BROWSER}} at {{VIEWPORT}} viewport</li>
+  <li>Observe: {{DESCRIPTION}}</li>
+</ol>
+
+<h3>Expected Behaviour</h3>
+<p>No {{ISSUE_TYPE}} should be present at this viewport.</p>
+
+<h3>Screenshots</h3>
+<p>See attached annotated screenshot.</p>
+
+<p><em>Filed automatically by argus-qa (Run ID: {{RUN_ID}})</em></p>
+</body>
+</html>
+

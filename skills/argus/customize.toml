@@ -1,0 +1,34 @@
+# argus-qa run defaults — override automation.config.json values for this run
+# Changes here affect ALL future runs from this project.
+
+dry_run     = true          # true = detect only, no ADO bugs filed; false = file real bugs
+browsers    = ["chromium", "firefox", "webkit"]
+
+[detectors]
+qa-detect-overflow       = true
+qa-detect-typography     = true
+qa-detect-touch          = true
+qa-detect-images         = true
+qa-detect-layout         = true
+qa-detect-forms          = true
+qa-detect-a11y           = true
+qa-detect-loading        = true
+qa-detect-console-errors = true
+qa-detect-network-errors = true
+qa-detect-form-validation = true
+
+qa-test-navigation       = true
+qa-test-auth-flow        = true
+qa-test-data-controls    = true
+qa-test-widgets          = true
+qa-test-states           = true
+qa-test-history          = true
+qa-test-idempotency      = true
+qa-test-keyboard         = true
+qa-test-dragdrop         = true
+qa-test-i18n             = true
+qa-test-theme            = true
+qa-test-cases            = true
+
+vision_review            = false
+

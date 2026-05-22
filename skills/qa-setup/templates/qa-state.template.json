@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "user": {
+    "name": "<USER_NAME>"
+  },
+  "defaults": {
+    "viewport": "all",
+    "mode": "dry-run",
+    "browsers": ["chromium", "firefox", "webkit"],
+    "headless": false,
+    "visionReview": false
+  },
+  "routes": {
+    "pinned": [],
+    "skipped": []
+  },
+  "lastRun": {
+    "id": null,
+    "timestamp": null,
+    "scope": null,
+    "bugsFiled": 0,
+    "regressions": 0,
+    "status": null
+  },
+  "chronicIssues": [],
+  "runsTotal": 0,
+  "lastUpdated": null
+}

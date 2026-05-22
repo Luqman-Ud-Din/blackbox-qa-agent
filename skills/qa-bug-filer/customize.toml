@@ -1,0 +1,5 @@
+# qa-bug-filer configuration
+dedup_key    = "issueType+url+viewport"   # fields used to deduplicate issues
+area_path    = ""                          # ADO area path; empty = project root
+max_bugs     = 50                          # cap per run to avoid ADO spam
+attach_screenshots = true
