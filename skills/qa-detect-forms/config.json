@@ -1,0 +1,11 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["fieldNoLabel", "formNoSubmit", "passwordNoToggle"],
+  "severity": {
+    "fieldNoLabel": "medium",
+    "formNoSubmit": "medium",
+    "passwordNoToggle": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

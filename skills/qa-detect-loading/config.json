@@ -1,0 +1,10 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["loadingStuck", "skeletonNotResolved"],
+  "severity": {
+    "loadingStuck": "medium",
+    "skeletonNotResolved": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

@@ -1,0 +1,20 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["tapTargetTooSmall", "tapTargetsTooClose"],
+  "severity": {
+    "tapTargetTooSmall": {
+      "mobile": "high",
+      "tablet": "high",
+      "laptop": "medium",
+      "desktop": "medium"
+    },
+    "tapTargetsTooClose": {
+      "mobile": "high",
+      "tablet": "high",
+      "laptop": "medium",
+      "desktop": "medium"
+    }
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

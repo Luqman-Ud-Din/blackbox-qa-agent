@@ -1,0 +1,11 @@
+{
+  "detectType": "interactive",
+  "issueTypes": ["noValidationFeedback", "missingRequired", "missingEmailValidation"],
+  "severity": {
+    "noValidationFeedback": "medium",
+    "missingRequired": "medium",
+    "missingEmailValidation": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

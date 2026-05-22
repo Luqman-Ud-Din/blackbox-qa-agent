@@ -1,0 +1,11 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["imageMissingAlt", "imageBroken", "imageStretched"],
+  "severity": {
+    "imageMissingAlt": "medium",
+    "imageBroken": "medium",
+    "imageStretched": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

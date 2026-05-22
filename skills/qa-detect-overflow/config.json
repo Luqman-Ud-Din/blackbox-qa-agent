@@ -1,0 +1,9 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["horizontalOverflow"],
+  "severity": {
+    "horizontalOverflow": "high"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

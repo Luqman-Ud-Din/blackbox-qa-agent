@@ -1,0 +1,12 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["noH1", "buttonNoName", "missingLang", "noSkipLink"],
+  "severity": {
+    "noH1": "medium",
+    "buttonNoName": "medium",
+    "missingLang": "medium",
+    "noSkipLink": "low"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

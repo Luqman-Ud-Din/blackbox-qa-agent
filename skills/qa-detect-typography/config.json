@@ -1,0 +1,11 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["fontTooSmall", "lineHeightTooTight", "textClipped"],
+  "severity": {
+    "fontTooSmall": "medium",
+    "lineHeightTooTight": "medium",
+    "textClipped": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

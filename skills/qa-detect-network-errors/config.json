@@ -1,0 +1,23 @@
+{
+  "detectType": "playwright",
+  "issueTypes": ["httpError", "requestFailed", "resourceLoadFailed"],
+  "severity": {
+    "httpError": {
+      "5xx": "high",
+      "4xx": "medium"
+    },
+    "requestFailed": "medium",
+    "resourceLoadFailed": "high"
+  },
+  "ignoredPatterns": [
+    "/cdn-cgi/rum",
+    "/favicon.ico",
+    "/__webpack_hmr",
+    "/sockjs-node",
+    "analytics.google.com",
+    "googletagmanager.com",
+    "hotjar.com"
+  ],
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

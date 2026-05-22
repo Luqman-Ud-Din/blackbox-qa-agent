@@ -1,0 +1,10 @@
+{
+  "detectType": "playwright",
+  "issueTypes": ["consoleError", "uncaughtException"],
+  "severity": {
+    "consoleError": "medium",
+    "uncaughtException": "high"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}

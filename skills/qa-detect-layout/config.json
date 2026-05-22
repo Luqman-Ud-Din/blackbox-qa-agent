@@ -1,0 +1,11 @@
+{
+  "detectType": "passive",
+  "issueTypes": ["elementCutOff", "contentTooNarrow", "actionBelowFold"],
+  "severity": {
+    "elementCutOff": "medium",
+    "contentTooNarrow": "medium",
+    "actionBelowFold": "medium"
+  },
+  "applyOn": ["mobile", "tablet", "laptop", "desktop"],
+  "enabled": true
+}
