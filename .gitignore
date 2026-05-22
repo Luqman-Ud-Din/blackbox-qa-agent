@@ -1,0 +1,14 @@
+node_modules/
+.tmp/
+.env
+.env.local
+*.log
+
+# Argus — personal state and secrets, never commit
+.claude/secrets.json
+.claude/qa-state.json
+.claude/settings.local.json
+
+# Playwright output — generated per run, safe to delete
+test-results/
+playwright-report/

@@ -1,0 +1,33 @@
+{
+  "name": "argus-qa",
+  "version": "1.0.0",
+  "description": "Argus — Autonomous UI Auditor Claude Code plugin. Crawls every route, viewport and browser. Detects layout, accessibility, form, network and console issues.",
+  "author": "argus-qa",
+  "license": "MIT",
+  "keywords": [
+    "argus",
+    "qa",
+    "testing",
+    "playwright",
+    "accessibility",
+    "automation",
+    "cross-browser",
+    "claude-plugin",
+    "claude-code"
+  ],
+  "files": [
+    ".claude-plugin",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  },
+  "peerDependencies": {
+    "@playwright/test": "^1.40.0"
+  },
+  "private": true
+}

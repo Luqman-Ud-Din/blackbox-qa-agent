@@ -1,0 +1,6 @@
+﻿node_modules/
+.tmp/
+.claude/
+*.log
+*.env
+.env.local

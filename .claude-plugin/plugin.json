@@ -1,0 +1,18 @@
+{
+  "name": "argus-qa",
+  "version": "1.0.0",
+  "description": "Argus — Autonomous UI Auditor. Crawls every route, viewport and browser. Detects layout, accessibility, form, network and console issues. Files bug tickets automatically.",
+  "author": "argus-qa",
+  "license": "MIT",
+  "keywords": [
+    "argus",
+    "qa",
+    "testing",
+    "playwright",
+    "accessibility",
+    "automation",
+    "cross-browser",
+    "claude-plugin",
+    "claude-code"
+  ]
+}
