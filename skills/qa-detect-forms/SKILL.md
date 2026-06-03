@@ -1,93 +1,97 @@
 ---
 name: qa-detect-forms
-description: "Detects form fields without labels, forms missing a submit button, and password fields without a show/hide toggle."
+description: "Detects unlabelled fields, password fields without show/hide toggle, forms without submit, narrow form fields on mobile, and tiny input height"
+model: haiku
+applyOn: all
+needsSetup: false
+viewportSensitive: true
 ---
 
-# Form Detection
+## What it checks
+- `fieldWithoutLabel` — input/textarea/select with no label/aria/title/placeholder
+- `passwordNoToggle` — password input without a show/hide toggle nearby
+- `formNoSubmit` — form without any visible submit button
+- `formFieldNotFullWidth` — on mobile (≤768px viewport), form input rendered <70% of parent width AND <300px wide
+- `inputHeightTooSmall` — on mobile/tablet (≤1024px viewport), input height <44px (below touch target minimum)
 
-## What Claude checks
-- `<input>`, `<select>`, and `<textarea>` elements that have **no accessible label** — none of: `<label for=id>`, `aria-label`, `aria-labelledby`, or `placeholder` (placeholder alone is insufficient but is noted separately)
-- `<form>` elements that contain no submit mechanism: no `<button type="submit">`, no `<input type="submit">`, and no button whose text matches submit patterns
-- `<input type="password">` fields that have no adjacent button or icon to toggle visibility (show/hide password)
-
-## How to detect
-
+## Probe (browser_evaluate)
 ```js
-// 1. Fields with no label
-const unlabelledFields = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea').forEach(el => {
-    const hasForLabel = el.id && document.querySelector(`label[for="${el.id}"]`);
-    const hasAriaLabel = el.getAttribute('aria-label');
-    const hasAriaLabelledBy = el.getAttribute('aria-labelledby');
-    const hasPlaceholder = el.getAttribute('placeholder');
-    const wrappedInLabel = el.closest('label');
-    if (!hasForLabel && !hasAriaLabel && !hasAriaLabelledBy && !wrappedInLabel) {
-      results.push({
-        selector: el.id ? `#${el.id}` : el.tagName.toLowerCase() + '[name="' + (el.name || '') + '"]',
-        type: el.type || el.tagName.toLowerCase(),
-        hasPlaceholderOnly: !!hasPlaceholder,
-        name: el.name || el.id || '(unnamed)'
-      });
-    }
-  });
-  return results;
-});
+() => {
+  const out = [];
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const skipTypes = new Set(['hidden','submit','reset','button','image','checkbox','radio']);
+  const vw = innerWidth;
+  const isMobile = vw <= 768;
+  const isMobileOrTablet = vw <= 1024;
 
-// 2. Forms missing a submit button
-const formsNoSubmit = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('form').forEach((form, i) => {
-    const hasSubmitInput = form.querySelector('input[type="submit"]');
-    const hasSubmitButton = form.querySelector('button[type="submit"]');
-    const hasButtonDefault = Array.from(form.querySelectorAll('button:not([type="reset"]):not([type="button"])')).length > 0;
-    const hasSubmitKeyword = Array.from(form.querySelectorAll('button, input[type="submit"]')).some(el => {
-      const text = (el.innerText || el.value || '').toLowerCase();
-      return /submit|save|send|continue|next|confirm|sign.?up|log.?in|register/.test(text);
-    });
-    if (!hasSubmitInput && !hasSubmitButton && !hasButtonDefault && !hasSubmitKeyword) {
-      results.push({
-        selector: form.id ? `#${form.id}` : `form:nth-of-type(${i + 1})`,
-        action: form.action || '(no action)',
-        fieldCount: form.querySelectorAll('input, select, textarea').length
-      });
-    }
-  });
-  return results;
-});
+  for (const el of document.querySelectorAll('input, textarea, select')) {
+    if (out.length >= 20) break;
+    if (el.type && skipTypes.has(el.type)) continue;
+    const sel = `${el.tagName.toLowerCase()}${el.id?`#${el.id}`:''}${el.name?`[name="${el.name}"]`:''}`;
 
-// 3. Password fields without show/hide toggle
-const passwordNoToggle = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('input[type="password"]').forEach(el => {
-    // Look for adjacent button/icon within the same container
-    const container = el.closest('div, fieldset, form') || el.parentElement;
-    const toggleButton = container && container.querySelector(
-      'button[aria-label*="show" i], button[aria-label*="hide" i], button[aria-label*="password" i], [class*="toggle" i], [class*="eye" i], [class*="show" i]'
-    );
-    if (!toggleButton) {
-      results.push({
-        selector: el.id ? `#${el.id}` : 'input[type="password"]',
-        name: el.name || el.id || '(unnamed)'
-      });
+    // 1. fieldWithoutLabel
+    const labelled = (el.labels && el.labels.length > 0) || el.hasAttribute('aria-label') ||
+      el.hasAttribute('aria-labelledby') || el.title || el.placeholder;
+    if (!labelled) {
+      out.push({ issueType:'fieldWithoutLabel', severity:'high', selector:sel,
+        description:'Form field has no label, aria-label, aria-labelledby, title, or placeholder', bbox: bb(el) });
     }
-  });
-  return results;
-});
+
+    // 2. passwordNoToggle
+    if (el.type === 'password') {
+      const parent = el.closest('div, fieldset, form');
+      const toggle = parent && parent.querySelector('[aria-label*="show" i], [aria-label*="hide" i], [data-testid*="toggle"]');
+      if (!toggle) {
+        out.push({ issueType:'passwordNoToggle', severity:'medium', selector:sel,
+          description:'Password field has no show/hide toggle button', bbox: bb(el) });
+      }
+    }
+
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+
+    // 3. inputHeightTooSmall — only on mobile/tablet
+    if (isMobileOrTablet && r.height < 44) {
+      out.push({ issueType:'inputHeightTooSmall', severity:'medium', selector:sel,
+        description:`Input height ${Math.round(r.height)}px is below 44px touch-target minimum (viewport=${vw}px)`, bbox: bb(el) });
+    }
+
+    // 4. formFieldNotFullWidth — only on mobile
+    if (isMobile) {
+      const parent = el.closest('.form-group, .field, .form-field, fieldset, form > div, form');
+      if (parent) {
+        const pr = parent.getBoundingClientRect();
+        if (pr.width > 0) {
+          const widthRatio = r.width / pr.width;
+          if (widthRatio < 0.7 && r.width < 300) {
+            out.push({ issueType:'formFieldNotFullWidth', severity:'medium', selector:sel,
+              description:`Form field ${Math.round(r.width)}px is only ${Math.round(widthRatio*100)}% of parent (${Math.round(pr.width)}px) on mobile — should be full-width`, bbox: bb(el) });
+          }
+        }
+      }
+    }
+  }
+
+  // 5. formNoSubmit
+  for (const form of document.querySelectorAll('form')) {
+    if (out.length >= 20) break;
+    const submit = form.querySelector('button[type="submit"], input[type="submit"], button:not([type]), [role="button"]');
+    if (!submit) {
+      const sel = `form${form.id?`#${form.id}`:''}`;
+      out.push({ issueType:'formNoSubmit', severity:'medium', selector:sel,
+        description:'Form has no visible submit button', bbox: bb(form) });
+    }
+  }
+
+  return out;
+}
 ```
 
-Cross-check with `page.accessibility.snapshot()` to confirm label associations at the accessibility tree level.
-
-## Issue schema
-- type: `"fieldNoLabel"` | `"formNoSubmit"` | `"passwordNoToggle"`
-- severity: from config (`medium` for all)
-- selector: CSS selector of the offending element
-- description:
-  - fieldNoLabel: `"Form field <selector> (type: <type>) has no associated label — add <label for>, aria-label, or aria-labelledby"` — add note if placeholder-only
-  - formNoSubmit: `"Form <selector> (action: <action>) has no submit button"`
-  - passwordNoToggle: `"Password field <selector> has no show/hide visibility toggle"`
-
-## Viewport behaviour
-- Check on **all viewports**
-- On mobile, confirm that any label toggle (show/hide password) remains accessible and not hidden by overflow
-- Form layout may differ between mobile (stacked) and desktop (inline) — check labels are still correctly associated in both layouts
+## Issues
+| issueType | severity | description |
+|---|---|---|
+| fieldWithoutLabel | high | "Form field has no label, aria-label, aria-labelledby, title, or placeholder" |
+| passwordNoToggle | medium | "Password field has no show/hide toggle button" |
+| formNoSubmit | medium | "Form has no visible submit button" |
+| inputHeightTooSmall | medium | "Input height {h}px below 44px touch-target minimum" |
+| formFieldNotFullWidth | medium | "Form field {pct}% of parent width on mobile — should be full-width" |

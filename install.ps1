@@ -145,7 +145,19 @@ $allowList = @(
     "PowerShell(& `"$installBatPath`")",
     "PowerShell(Get-ChildItem *)", "PowerShell(Get-Content *)", "PowerShell(Set-Content *)",
     "PowerShell(New-Item *)", "PowerShell(Remove-Item *)", "PowerShell(Copy-Item *)",
-    "PowerShell(node *)", "PowerShell(npx *)", "PowerShell(npm *)"
+    "PowerShell(node *)", "PowerShell(npx *)", "PowerShell(npm *)",
+    "mcp__playwright__browser_navigate",
+    "mcp__playwright__browser_snapshot",
+    "mcp__playwright__browser_click",
+    "mcp__playwright__browser_type",
+    "mcp__playwright__browser_press_key",
+    "mcp__playwright__browser_evaluate",
+    "mcp__playwright__browser_wait_for",
+    "mcp__playwright__browser_take_screenshot",
+    "mcp__playwright__browser_console_messages",
+    "mcp__playwright__browser_network_requests",
+    "mcp__playwright__browser_close",
+    "mcp__playwright__browser_resize"
 )
 
 $perms = [ordered]@{
@@ -156,6 +168,59 @@ $permsJson = $perms | ConvertTo-Json -Depth 10
 Write-Host "Done."
 Write-Host ""
 
+# Step 7 - Install Playwright MCP globally (for cheap, fast browser bridge)
+Write-Host "Step 7: Installing Playwright MCP server..."
+npm install -g "@playwright/mcp@latest" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  WARNING: Playwright MCP install failed. The agent will fall back to inline Bash mode (slower)." -ForegroundColor Yellow
+} else {
+    Write-Host "  [OK] @playwright/mcp installed globally"
+}
+Write-Host ""
+
+# Step 8 - Verify jq (only needed when filing real ADO bugs)
+Write-Host "Step 8: Checking jq..."
+$jqOk = $false
+try {
+    $jqVer = & jq --version 2>$null
+    if ($LASTEXITCODE -eq 0) { $jqOk = $true }
+} catch {}
+
+if (-not $jqOk) {
+    Write-Host "  jq not found. Attempting winget install..."
+    winget install --silent --accept-source-agreements --accept-package-agreements jqlang.jq 2>&1 | Out-Null
+    try {
+        $jqVer = & jq --version 2>$null
+        if ($LASTEXITCODE -eq 0) { $jqOk = $true }
+    } catch {}
+}
+if ($jqOk) {
+    Write-Host "  [OK] jq $jqVer"
+} else {
+    Write-Host "  WARNING: jq not installed. Required only when dry_run = false (filing real ADO bugs)." -ForegroundColor Yellow
+    Write-Host "  Manual install: https://jqlang.github.io/jq/download/" -ForegroundColor Yellow
+}
+Write-Host ""
+
+# Step 9 - Write .mcp.json so Claude Code finds the Playwright MCP server
+Write-Host "Step 9: Writing project .mcp.json..."
+$mcpJsonPath  = Join-Path $cacheDir ".mcp.json"
+$mcpJsonSrc   = Join-Path $pluginSrc ".mcp.json"
+$mcpConfig    = @'
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--headless=false"]
+    }
+  }
+}
+'@
+[System.IO.File]::WriteAllText($mcpJsonPath, $mcpConfig, (New-Object System.Text.UTF8Encoding $false))
+[System.IO.File]::WriteAllText($mcpJsonSrc,  $mcpConfig, (New-Object System.Text.UTF8Encoding $false))
+Write-Host "  [OK] .mcp.json written to plugin source and cache"
+Write-Host ""
+
 Write-Host "==========================="
 Write-Host "Install complete!"
 Write-Host ""
@@ -164,15 +229,18 @@ Write-Host "  [OK] Plugin registered"
 Write-Host "  [OK] Node packages installed"
 Write-Host "  [OK] Browser binaries ready (chromium, firefox, webkit)"
 Write-Host "  [OK] Default config created"
-Write-Host "  [OK] Permissions configured"
+Write-Host "  [OK] Permissions configured (incl. MCP tools)"
+Write-Host "  [OK] Playwright MCP server installed"
+Write-Host "  [OK] jq verified / installed"
+Write-Host "  [OK] .mcp.json written"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Close Claude Code completely"
-Write-Host "  2. Re-open Claude Code (plugins load at startup)"
-Write-Host "  3. Open your project folder in Claude Code"
-Write-Host "  4. Type:  hi"
+Write-Host "  2. Re-open Claude Code (plugins + MCP servers load at startup)"
+Write-Host "  3. Set default model:  /model claude-haiku-4-5-20251001"
+Write-Host "  4. Open your project folder in Claude Code"
+Write-Host "  5. Type:  hi"
 Write-Host ""
 Write-Host "Argus will greet you -- just paste your app URL to start an audit."
-Write-Host "No further setup needed."
 Write-Host "==========================="
 Write-Host ""

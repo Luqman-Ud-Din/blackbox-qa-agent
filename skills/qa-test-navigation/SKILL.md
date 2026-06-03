@@ -1,6 +1,11 @@
 ---
 name: qa-test-navigation
 description: "Verify internal nav links resolve, tabs switch content, and redirects land on real pages"
+model: haiku
+applyOn: [mobile, tablet, desktop]
+needsSetup: false
+viewportSensitive: false
+interactive: true
 ---
 
 # QA Test — Navigation

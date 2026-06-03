@@ -1,81 +1,53 @@
 ---
 name: qa-detect-touch
-description: "Detects interactive elements smaller than 44px and tap targets that are too close together."
+description: "Detects tap targets smaller than 44×44px and interactive elements too close together"
+model: haiku
+applyOn: [mobile, tablet]
+needsSetup: false
+viewportSensitive: true
 ---
 
-# Touch Target Detection
+## What it checks
+Touch targets <44px and interactive elements <8px apart. Mobile + tablet only.
 
-## What Claude checks
-- Buttons, links, inputs, selects, checkboxes, radio buttons, and toggle switches whose rendered **height or width is below 44px** (Apple HIG minimum / WCAG 2.5.5 AAA)
-- Pairs of interactive elements whose bounding boxes are **less than 8px apart** (edge-to-edge), making them hard to tap without hitting the wrong target
-- Elements that rely on CSS `padding` to meet the 44px threshold — verify the actual hit area, not just the visual size
-
-## How to detect
-
+## Probe (browser_evaluate)
 ```js
-// 1. Tap targets too small
-const smallTargets = await page.evaluate(() => {
-  const interactive = document.querySelectorAll(
-    'button, a, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [tabindex]'
-  );
-  const results = [];
-  interactive.forEach(el => {
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return; // hidden
-    if (rect.width < 44 || rect.height < 44) {
-      results.push({
-        selector: el.id
-          ? `#${el.id}`
-          : el.tagName.toLowerCase() + (el.className ? `.${el.className.trim().split(/\s+/)[0]}` : ''),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        text: (el.innerText || el.value || el.getAttribute('aria-label') || '').slice(0, 60)
-      });
-    }
-  });
-  return results;
-});
+() => {
+  const sel = el => (el.tagName.toLowerCase() + (el.id ? `#${el.id}` : '')).slice(0,120);
+  const out = [];
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const q = 'a,button,[role="button"],input,select,textarea,[tabindex]';
+  const els = [...document.querySelectorAll(q)].map(el => ({ el, r: el.getBoundingClientRect() }))
+    .filter(x => x.r.width > 0 && x.r.height > 0 && x.r.top >= 0 && x.r.bottom <= innerHeight*3);
 
-// 2. Tap targets too close together (< 8px gap between neighbouring elements)
-const tooClose = await page.evaluate(() => {
-  const interactive = Array.from(document.querySelectorAll(
-    'button, a[href], input, select, [role="button"], [role="link"]'
-  )).filter(el => {
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
-  });
-  const results = [];
-  for (let i = 0; i < interactive.length; i++) {
-    for (let j = i + 1; j < interactive.length; j++) {
-      const a = interactive[i].getBoundingClientRect();
-      const b = interactive[j].getBoundingClientRect();
-      const horizontalGap = Math.max(0, Math.max(a.left, b.left) - Math.min(a.right, b.right));
-      const verticalGap = Math.max(0, Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom));
-      const gap = Math.max(horizontalGap, verticalGap);
-      if (gap < 8 && gap >= 0) {
-        results.push({
-          elementA: interactive[i].id ? `#${interactive[i].id}` : interactive[i].tagName.toLowerCase(),
-          elementB: interactive[j].id ? `#${interactive[j].id}` : interactive[j].tagName.toLowerCase(),
-          gap: Math.round(gap)
-        });
+  for (const {el, r} of els) {
+    if (out.length >= 20) break;
+    if (r.width < 44 || r.height < 44) {
+      out.push({ issueType:'smallTapTarget', severity:'high', selector:sel(el),
+        description:`Touch target issue: ${Math.round(r.width)}×${Math.round(r.height)}px — minimum is 44×44px`, bbox: bb(el) });
+    }
+  }
+  const top = els.slice(0, 50);
+  outer: for (let i = 0; i < top.length; i++) {
+    for (let j = i+1; j < top.length; j++) {
+      const a = top[i].r, b = top[j].r;
+      const dx = Math.max(0, Math.max(a.left,b.left) - Math.min(a.right,b.right));
+      const dy = Math.max(0, Math.max(a.top,b.top) - Math.min(a.bottom,b.bottom));
+      const d = Math.sqrt(dx*dx + dy*dy);
+      if (d > 0 && d < 8) {
+        if (out.length >= 20) break outer;
+        out.push({ issueType:'tapTargetsTooClose', severity:'medium', selector:sel(top[i].el),
+          description:`Touch target issue: ${Math.round(d)}px gap < minimum 8px between interactive elements` });
+        break;
       }
     }
   }
-  return results.slice(0, 20); // cap results
-});
+  return out;
+}
 ```
 
-Visually confirm findings with a screenshot — some elements are decorative despite having interactive semantics.
-
-## Issue schema
-- type: `"tapTargetTooSmall"` | `"tapTargetsTooClose"`
-- severity: from config (`high` on mobile/tablet, `medium` on desktop)
-- selector: CSS selector of the offending element(s)
-- description:
-  - tapTargetTooSmall: `"Interactive element <selector> ('<text>') is <W>x<H>px — minimum tap target is 44x44px"`
-  - tapTargetsTooClose: `"<elementA> and <elementB> are only <gap>px apart — minimum spacing between tap targets is 8px"`
-
-## Viewport behaviour
-- Priority viewports: **mobile** and **tablet** — these are the primary touch contexts
-- Still check **laptop** and **desktop** for tapTargetTooSmall (WCAG 2.5.5 applies universally)
-- tapTargetsTooClose is most critical on mobile; report it on all viewports but note mobile severity is higher
+## Issues
+| issueType | severity | description |
+|---|---|---|
+| smallTapTarget | high | "Touch target issue: {detail}" |
+| tapTargetsTooClose | medium | "Touch target issue: {detail}" |

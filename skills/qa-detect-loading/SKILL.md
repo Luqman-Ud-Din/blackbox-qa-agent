@@ -1,115 +1,72 @@
 ---
 name: qa-detect-loading
-description: "Detects spinners/loaders still visible after 3 seconds post-networkidle, and skeleton screens that never resolve."
+description: "Detects loading spinners stuck 3s after networkidle, blank pages, and 404/error content even when HTTP returned 200 (SPA routing failures)"
+model: haiku
+applyOn: all
+needsSetup: false
+viewportSensitive: false
+preWait: 3000
 ---
 
-# Loading State Detection
+## What it checks
+- `stuckSpinner` — loading indicators still visible 3s after networkidle
+- `blankPage` — page body text < 20 chars after load
+- `http404Content` — page title or H1/H2 contains "404"/"not found"/"page doesn't exist"/"oops" patterns AND body has < 500 chars (SPA route resolved to error content despite HTTP 200)
 
-## What Claude checks
-- **Spinners and loaders** still visible more than **3 seconds after network idle** — indicates a hung request or infinite loading state
-- **Skeleton screens** (placeholder shimmer/pulse animations) that remain in the DOM after content should have loaded
-- **Progress bars** that are stuck at a partial fill (e.g. `width: 40%` with no change after 3s)
-- Loading indicators that are present but hidden via `opacity: 0` or `visibility: hidden` while still consuming layout space
+## Orchestrator note
+Call `browser_wait_for(time=3000)` after the cell's navigation completes, BEFORE running the probe.
 
-## How to detect
-
+## Probe (browser_evaluate)
 ```js
-// Step 1: Wait for network idle
-await page.waitForLoadState('networkidle');
+() => {
+  const sel = el => {
+    const cls = (el.className && typeof el.className === 'string')
+      ? '.' + el.className.trim().split(/\s+/).slice(0,2).join('.') : '';
+    return (el.tagName.toLowerCase() + (el.id?`#${el.id}`:'') + cls).slice(0,120);
+  };
+  const out = [];
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const q = '[class*="spinner"],[class*="loading"],[role="progressbar"],.skeleton,[class*="skeleton"],[class*="shimmer"],[aria-busy="true"],[data-testid*="loading"],[data-testid*="spinner"]';
+  for (const el of document.querySelectorAll(q)) {
+    if (out.length >= 10) break;
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    out.push({ issueType:'stuckSpinner', severity:'high', selector:sel(el),
+      description:'Loading indicator/spinner/skeleton still visible 3s after networkidle', bbox: bb(el) });
+  }
+  const text = (document.body.innerText || '').trim();
+  if (text.length < 20) {
+    out.push({ issueType:'blankPage', severity:'critical', selector:null,
+      description:`Page appears blank — only ${text.length} chars of text content after load` });
+  }
 
-// Step 2: Wait an additional 3 seconds
-await page.waitForTimeout(3000);
+  // http404Content — SPA showing error content despite HTTP 200
+  const title = (document.title || '').toLowerCase();
+  const h1 = (document.querySelector('h1')?.innerText || '').toLowerCase();
+  const h2 = (document.querySelector('h2')?.innerText || '').toLowerCase();
+  const errorPattern = /\b404\b|not\s+found|page\s+(doesn'?t|does\s+not)\s+exist|oops|something\s+went\s+wrong|page\s+not\s+available/;
+  const titleMatch = errorPattern.test(title);
+  const h1Match = errorPattern.test(h1);
+  const h2Match = errorPattern.test(h2);
+  if ((titleMatch || h1Match || h2Match) && text.length < 500) {
+    const matched = [
+      titleMatch ? `title="${title.slice(0,60)}"` : '',
+      h1Match ? `h1="${h1.slice(0,60)}"` : '',
+      h2Match ? `h2="${h2.slice(0,60)}"` : ''
+    ].filter(Boolean).join(', ');
+    out.push({ issueType:'http404Content', severity:'high', selector:null,
+      description:`Page shows error content despite HTTP 200 (SPA route resolved to error): ${matched}, body=${text.length} chars` });
+  }
 
-// Step 3: Check for visible loading spinners
-const stuckSpinners = await page.evaluate(() => {
-  const spinnerSelectors = [
-    '[class*="spinner"]', '[class*="loader"]', '[class*="loading"]',
-    '[class*="spin"]', '[aria-label*="loading" i]', '[aria-busy="true"]',
-    '[role="progressbar"]', '[class*="progress"]', '[class*="skeleton"]',
-    '[class*="shimmer"]', '[class*="placeholder"]', '[class*="pulse"]'
-  ];
-  const results = [];
-  spinnerSelectors.forEach(sel => {
-    document.querySelectorAll(sel).forEach(el => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      const isVisible =
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        parseFloat(style.opacity) > 0 &&
-        rect.width > 0 &&
-        rect.height > 0;
-      if (isVisible) {
-        results.push({
-          selector: el.id ? `#${el.id}` : sel,
-          className: el.className,
-          rect: { width: Math.round(rect.width), height: Math.round(rect.height) }
-        });
-      }
-    });
-  });
-  return results;
-});
-
-// Step 4: Check skeleton screens specifically
-const stuckSkeletons = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('[class*="skeleton"], [class*="shimmer"], [class*="placeholder"]').forEach(el => {
-    const style = window.getComputedStyle(el);
-    if (style.display !== 'none' && style.visibility !== 'hidden') {
-      // Check if it still has animation (shimmer animations indicate not-yet-resolved)
-      const hasAnimation = style.animationName && style.animationName !== 'none';
-      if (hasAnimation) {
-        results.push({
-          selector: el.id ? `#${el.id}` : el.tagName.toLowerCase() + '.' + (el.className || '').trim().split(/\s+/)[0],
-          animationName: style.animationName
-        });
-      }
-    }
-  });
-  return results;
-});
-
-// Step 5: Check for stuck progress bars
-const stuckProgressBars = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('[role="progressbar"], [class*="progress-bar"], progress').forEach(el => {
-    const value = el.getAttribute('aria-valuenow') || el.getAttribute('value');
-    const max = el.getAttribute('aria-valuemax') || el.getAttribute('max') || '100';
-    const style = window.getComputedStyle(el);
-    const width = style.width;
-    // Flag progress bars that aren't at 0% or 100%
-    if (value !== null && value !== max && value !== '0') {
-      results.push({
-        selector: el.id ? `#${el.id}` : '[role="progressbar"]',
-        valuenow: value,
-        valuemax: max
-      });
-    } else if (width && width.includes('%')) {
-      const pct = parseFloat(width);
-      if (pct > 5 && pct < 95) {
-        results.push({
-          selector: el.id ? `#${el.id}` : el.tagName.toLowerCase(),
-          width
-        });
-      }
-    }
-  });
-  return results;
-});
+  return out;
+}
 ```
 
-Take a screenshot after the 3s wait to visually confirm loading indicators are still visible.
-
-## Issue schema
-- type: `"loadingStuck"` | `"skeletonNotResolved"`
-- severity: from config (`medium` for both)
-- selector: CSS selector of the stuck element
-- description:
-  - loadingStuck: `"Loading indicator <selector> is still visible 3 seconds after networkidle — possible hung request"`
-  - skeletonNotResolved: `"Skeleton screen <selector> still has shimmer animation 3s after networkidle — content has not loaded"`
-
-## Viewport behaviour
-- Check on **all viewports** — loading issues are not viewport-specific
-- Network conditions may affect timing; if testing on slow throttled connection increase the wait from 3s to 8s
-- Always capture a screenshot to document the stuck state as evidence
+## Issues
+| issueType | severity | description |
+|---|---|---|
+| stuckSpinner | high | "Loading indicator/spinner/skeleton still visible 3s after networkidle" |
+| blankPage | critical | "Page appears blank — only {len} chars of text content after load" |
+| http404Content | high | "Page shows 404/error content despite HTTP 200 (SPA error route)" |

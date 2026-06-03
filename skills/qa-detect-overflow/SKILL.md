@@ -1,67 +1,46 @@
 ---
 name: qa-detect-overflow
-description: "Detects horizontal scroll and elements whose right edge exceeds the viewport width."
+description: "Detects horizontal content overflow on any element"
+model: haiku
+applyOn: all
+needsSetup: false
+viewportSensitive: true
 ---
 
-# Overflow Detection
+## What it checks
+Horizontal content overflow on any element where `scrollWidth > clientWidth + 2`,
+excluding intentionally clipped elements (`overflow-x: hidden`) and zero-size nodes.
 
-## What Claude checks
-- Whether `document.documentElement.scrollWidth` exceeds `window.innerWidth` at any tested viewport
-- Individual elements whose bounding-box right edge (`getBoundingClientRect().right`) is greater than `window.innerWidth`
-- Tables and CSS grid/flex containers whose content overflows their parent horizontally
-- Elements with `overflow-x: scroll` or `overflow-x: auto` that are actually scrolling (content wider than container)
-
-## How to detect
-
+## Probe (browser_evaluate)
 ```js
-// 1. Page-level horizontal overflow
-const pageOverflow = await page.evaluate(() => {
-  return document.documentElement.scrollWidth > window.innerWidth;
-});
-
-// 2. Elements clipping past the right viewport edge
-const overflowingElements = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('*').forEach(el => {
-    const rect = el.getBoundingClientRect();
-    if (rect.right > window.innerWidth + 2) {  // 2px tolerance
-      results.push({
-        tag: el.tagName.toLowerCase(),
-        selector: el.id ? `#${el.id}` : el.className ? `.${el.className.trim().split(/\s+/)[0]}` : el.tagName.toLowerCase(),
-        right: Math.round(rect.right),
-        viewportWidth: window.innerWidth
-      });
+() => {
+  const sel = el => {
+    const id = el.id ? `#${el.id}` : '';
+    const cls = (el.className && typeof el.className === 'string')
+      ? '.' + el.className.trim().split(/\s+/).slice(0,2).join('.')
+      : '';
+    return (el.tagName.toLowerCase() + id + cls).slice(0, 120);
+  };
+  const out = [];
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  for (const el of document.querySelectorAll('*')) {
+    if (out.length >= 20) break;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    if (getComputedStyle(el).overflowX === 'hidden') continue;
+    if (el.scrollWidth > el.clientWidth + 2) {
+      out.push({
+        issueType: 'horizontalOverflow',
+        severity: 'high',
+        selector: sel(el),
+        description: `Horizontal overflow on ${sel(el)}: scrollWidth ${el.scrollWidth}px > clientWidth ${el.clientWidth}px`, bbox: bb(el) });
     }
-  });
-  return results;
-});
-
-// 3. Tables / grids overflowing
-const tableOverflow = await page.evaluate(() => {
-  const results = [];
-  document.querySelectorAll('table, [class*="grid"], [class*="table"]').forEach(el => {
-    if (el.scrollWidth > el.clientWidth) {
-      results.push({
-        tag: el.tagName.toLowerCase(),
-        selector: el.id ? `#${el.id}` : el.className ? `.${el.className.trim().split(/\s+/)[0]}` : el.tagName.toLowerCase(),
-        scrollWidth: el.scrollWidth,
-        clientWidth: el.clientWidth
-      });
-    }
-  });
-  return results;
-});
+  }
+  return out;
+}
 ```
 
-Use `page.locator('body')` to confirm visible overflow before filing.
-
-## Issue schema
-- type: `"horizontalOverflow"`
-- severity: `high`
-- selector: CSS selector of the overflowing element, or `null` if page-level overflow
-- description: `"Element <selector> extends to <right>px but viewport is <viewportWidth>px wide"` — or `"Page has horizontal scroll: scrollWidth <N>px > innerWidth <M>px"` for page-level
-
-## Viewport behaviour
-- Check on **all viewports** (mobile, tablet, laptop, desktop)
-- Overflow is most common on mobile; always include mobile results even if laptop looks fine
-- Skip elements that are intentionally off-screen (e.g. drawer menus with `transform: translateX`)
+## Issues
+| issueType | severity | description |
+|---|---|---|
+| horizontalOverflow | high | "Horizontal overflow on {selector}: scrollWidth {sw}px > clientWidth {cw}px" |

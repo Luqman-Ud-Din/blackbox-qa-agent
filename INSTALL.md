@@ -1,6 +1,6 @@
 # Installation Guide
 
-**QA Sentinel** (the `/argus-qa:argus` plugin) runs entirely from your machine — there is no SaaS layer. That means a few system tools need to be in place before the first audit. This guide walks through every prerequisite, then how to install and use the plugin.
+**QA Sentinel** (the `/argus-qa:qa-argus` plugin) runs entirely from your machine — there is no SaaS layer. That means a few system tools need to be in place before the first audit. This guide walks through every prerequisite, then how to install and use the plugin.
 
 Most users finish in 10–15 minutes.
 
@@ -176,7 +176,7 @@ If any step fails, the wizard tells you exactly what to fix.
 ## 7. Run the first audit
 
 ```
-/argus-qa:argus --dry-run
+/argus-qa:qa-argus --dry-run
 ```
 
 `--dry-run` skips the ADO filing step — detection runs and prints results to the terminal without creating real bugs. Great for verifying everything works before going live.
@@ -184,7 +184,7 @@ If any step fails, the wizard tells you exactly what to fix.
 When the dry run looks right:
 
 ```
-/argus-qa:argus
+/argus-qa:qa-argus
 ```
 
 This files real ADO bugs with attached screenshots.
@@ -216,11 +216,11 @@ Your PAT lacks "Work Items: Read & Write" scope. Regenerate the PAT with the cor
 
 By default, the plugin runs in headless mode for speed. To watch the browsers:
 
-Edit `skills/qa-spec-runner/customize.toml` (inside the plugin) and set:
+Edit `skills/qa-argus/customize.toml` (inside the plugin) and set:
 ```toml
-[playwright]
 headless = false
 ```
+Or, simpler: pass `--headed` as a CLI flag to `/argus-qa:qa-argus`. The flag overrides the config for that one run.
 
 ### Cross-browser only runs Chromium
 
@@ -277,9 +277,8 @@ Old `.tmp/qa-*` directories accumulate over time. They're useful for debugging �
 ## Next steps
 
 - Read [README.md](README.md) for the command reference
-- Run `/argus-qa:argus --dry-run --route /your-most-important-page` to test a single page first
-- Open `skills/argus/customize.toml` to toggle individual detectors on/off
-- Open `skills/qa-spec-runner/customize.toml` to change workers, headless mode, timeout
+- Run `/argus-qa:qa-argus --dry-run --route /your-most-important-page` to test a single page first
+- Open `skills/qa-argus/customize.toml` — single config file controlling detectors on/off, workers, headless mode, browsers, model routing, vision scoping, grammar scoping, and resilience timeouts (all merged into qa-argus during the v2.0.0 refactor)
 
 If you hit an issue not covered here, check the logs in `.tmp/qa-<latest-run-id>/filed-bugs.log` — the plugin is designed to surface real errors visibly, not silence them.
 

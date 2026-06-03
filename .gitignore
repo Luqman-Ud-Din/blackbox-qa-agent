@@ -8,7 +8,11 @@ node_modules/
 .claude/secrets.json
 .claude/qa-state.json
 .claude/settings.local.json
+.claude/automation.config.json
+.claude/qa-test-cases.md
+
 
 # Playwright output — generated per run, safe to delete
 test-results/
 playwright-report/
+.playwright-mcp

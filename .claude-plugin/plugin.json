@@ -1,7 +1,7 @@
 {
   "name": "argus-qa",
-  "version": "1.0.0",
-  "description": "Argus — Autonomous UI Auditor. Crawls every route, viewport and browser. Detects layout, accessibility, form, network and console issues. Files bug tickets automatically.",
+  "version": "2.0.0",
+  "description": "Argus — Autonomous UI Auditor (v2). 74 skills covering layout, typography, accessibility, forms, navigation, content review, RTL, dark mode, and AI vision review. Auto-installs Playwright MCP on first run, auto-invokes setup wizard, streams findings to disk, files Azure DevOps bugs with annotated screenshots.",
   "author": {
     "name": "Luqman-Ud-Din"
   },

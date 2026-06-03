@@ -1,4 +1,0 @@
-workers      = 1
-headless     = false
-timeout_ms   = 30000
-fully_parallel = true
