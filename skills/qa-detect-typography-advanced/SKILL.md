@@ -7,38 +7,53 @@ needsSetup: false
 viewportSensitive: false
 ---
 
-## What it checks (21 issue types in 5 categories)
+## What it checks (35 issue types in 5 categories — Typography gap-fill 2026-06-03)
 
-### Font loading & rendering (7)
+### Font loading & rendering (9)
 - `webFontFailed` (high) — @font-face declared but the file failed to load
-- `syntheticBold` (medium) — browser is faking 600/700/800 weight because that weight wasn't loaded
-- `syntheticItalic` (medium) — same for italic variant
+- `syntheticWeight` (medium for 700+/italic, low for 300/500/600) — browser is faking ANY weight or style because that face wasn't loaded
 - `noFontDisplay` (medium) — @font-face missing `font-display: swap/fallback/optional` → causes FOIT
 - `noGenericFallback` (low) — font-family with no `serif`/`sans-serif`/`monospace` at end of chain
-- `tooManyFontFamilies` (low) — page uses >3 different font-families (design system drift)
+- `tooManyFontFamilies` (low) — page uses >5 non-icon font-families (icon fonts auto-detected via unicode-range PUA U+E000–U+F8FF; no hardcoded name list)
 - `mixedContentFont` (high) — HTTPS page loads HTTP font URL (browser blocks)
+- `variableFontUnsupported` (low) — `font-variation-settings` declared on a font that isn't variable (settings have no effect)
+- `variableFontOutOfRange` (medium) — requested axis value outside the variable font's actual range (browser clamps silently)
+- `noOpticalSizing` (low) — body uses variable font but `font-optical-sizing` is not `auto` (loses size-appropriate rendering)
 
-### Accessibility (8)
+### Accessibility (12)
 - `contrastFail` (high) — real WCAG ratio < 4.5:1 (normal) or < 3:1 (large text) — uses proper luminance math
 - `missingH1` (medium) — page has headings but no `<h1>`
 - `multipleH1` (medium) — page has more than one `<h1>`
-- `headingSkip` (low) — H2 → H4 (skipped H3)
+- `headingSkip` (low) — H2 → H4 (skipped H3) — now includes nearest landmark + heading text for actionability
 - `linkNoDecoration` (medium) — inline link inside body text has `text-decoration: none` (WCAG 1.4.1)
 - `fontSizePxBased` (medium) — root `font-size` declared in `px` instead of `rem` (WCAG 1.4.4)
 - `allCapsBodyCopy` (low) — paragraph-length text with `text-transform: uppercase`
 - `italicOnlyEmphasis` (low) — `<em>` with italic but no bold — low-vision users can't perceive slant alone
+- `missingHtmlLang` (medium) — `<html>` missing `lang` attribute (breaks hyphenation, quote glyphs, screen-reader voice)
+- `invalidHtmlLang` (low) — `<html lang="...">` value isn't a valid BCP 47 tag
+- `deepHeadingHierarchy` (low) — page uses H5/H6 as document structure (sign of improvised hierarchy)
+- `h2MissingInHierarchy` (low) — page jumps from H1 to H3+ with no H2 between (broken outline for SR users)
 
-### Content quality (3)
+### Content quality (5)
 - `tofuGlyph` (high) — visible `□` or `�` replacement characters (font missing glyph)
 - `emptyTextElement` (medium) — heading/button/link with no text, no aria-label, no title
 - `extremeLetterSpacing` (low) — `letter-spacing` < -0.5px or > 3px on body text
+- `wallOfText` (medium) — content region > 1200 chars with too few structural breaks (~800+ chars per break)
+- `unstyledPullQuote` (low) — `<blockquote>` renders identical to body copy (no border/italic/quote marks)
 
-### Performance (2)
+### Performance (5)
 - `noFontPreload` (low) — custom fonts used but no `<link rel="preload" as="font">`
+- `corsFontPreloadMissing` (medium) — `<link rel="preload" as="font">` is missing the `crossorigin` attribute; browsers silently refuse the preload
 - `unreadableTextShadow` (medium) — text-shadow with blur > 4px making text fuzzy
+- `fontPayloadCount` (low) — page loads >4 font files (each blocks render)
+- `fontPayloadHeavy` (medium) — total font payload >300 KB (blocks LCP / Web Vitals)
 
-### Layout (1)
+### Layout (5)
 - `inconsistentRhythm` (low) — paragraphs use >3 different line-height ratios (vertical rhythm drift)
+- `measureTooLong` (low) — paragraph width yields > 90 chars per line (readability sweet spot 45-75)
+- `measureTooShort` (low) — paragraph width yields < 30 chars per line (eye flicks back too often)
+- `baselineGridOff` (low) — computed line-height is not on a 4px baseline grid (vertical alignment drifts vs adjacent UI)
+- `widowLine` (low) — paragraph ends with a single short word on its own line (typographic widow)
 
 ## Probe (browser_evaluate)
 
@@ -67,36 +82,41 @@ viewportSensitive: false
     }
   } catch (_) {}
 
-  // 2 & 3. Synthetic bold + italic
-  const seenSynBold = new Set(), seenSynItalic = new Set();
+  // 2 & 3. Synthetic weight + style matrix — flag ANY missing weight/style
+  // (was: only checked w >= 600; missed silent synthesis at 300/500/600)
+  const seenSynth = new Set();
   for (const el of sample) {
     const cs = getComputedStyle(el);
     const family = cs.fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+    if (!family) continue;
     const fs = parseFloat(cs.fontSize) || 16;
-    const weight = cs.fontWeight;
-    const w = parseInt(weight) || 400;
-    if (w >= 600 && !seenSynBold.has(family + w)) {
-      try {
-        if (!document.fonts.check(`${weight} ${fs}px "${family}"`)) {
-          seenSynBold.add(family + w);
-          out.push({ issueType:'syntheticBold', severity:'medium', selector:sel(el),
-            description:`Browser synthesizing bold for "${family}" weight ${weight} — real bold weight not loaded; appearance is artificial.`, bbox:bb(el) });
-        }
-      } catch (_) {}
-    }
-    if (cs.fontStyle === 'italic' && !seenSynItalic.has(family)) {
-      try {
-        if (!document.fonts.check(`italic ${weight} ${fs}px "${family}"`)) {
-          seenSynItalic.add(family);
-          out.push({ issueType:'syntheticItalic', severity:'medium', selector:sel(el),
-            description:`Browser synthesizing italic for "${family}" — italic variant not loaded; appearance is artificial slant.`, bbox:bb(el) });
-        }
-      } catch (_) {}
-    }
+    const w = parseInt(cs.fontWeight) || 400;
+    const style = cs.fontStyle;
+    // Skip the default (weight 400, style normal) — always available
+    if (w === 400 && style === 'normal') continue;
+    const key = `${family}|${w}|${style}`;
+    if (seenSynth.has(key)) continue;
+    seenSynth.add(key);
+    try {
+      if (!document.fonts.check(`${style} ${w} ${fs}px "${family}"`)) {
+        // Severity: 700+ and italic are visually obvious; 300/500/600 subtler but real
+        const sev = (w >= 700 || style === 'italic') ? 'medium' : 'low';
+        const styleLabel = style === 'italic' ? 'italic ' : '';
+        out.push({
+          issueType: 'syntheticWeight', severity: sev, selector: sel(el),
+          description: `Browser synthesizing ${styleLabel}weight ${w} for "${family}" — not loaded. Render is interpolated/algorithmic, not the real face.`,
+          bbox: bb(el)
+        });
+      }
+    } catch (_) {}
   }
 
-  // 4–6. @font-face font-display, fallback chain (walks stylesheets)
+  // 4–6. @font-face font-display, fallback chain, icon-font detection (walks stylesheets)
+  // Icon fonts declare unicode-range in PUA (U+E000-U+F8FF). Body fonts don't.
+  // This structural signal replaces hardcoded name allow-lists ("Material Icons", "FontAwesome", ...).
   const declaredFamilies = new Set();
+  const iconFamilies     = new Set();   // detected via unicode-range PUA signature
+  const variableFonts    = new Map();   // family -> { wMin, wMax } from FontFace API later
   let noDisp = 0, noFallback = 0;
   for (const sheet of document.styleSheets) {
     let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
@@ -106,7 +126,14 @@ viewportSensitive: false
         if (r.type === CSSRule.MEDIA_RULE) { walk(r.cssRules || []); continue; }
         if (r.type === CSSRule.FONT_FACE_RULE && r.style) {
           const fam = (r.style.fontFamily || '').replace(/['"]/g, '').trim();
-          if (fam) declaredFamilies.add(fam);
+          if (fam) {
+            declaredFamilies.add(fam);
+            // PUA detection: unicode-range covering U+E000-U+F8FF
+            const range = (r.style.unicodeRange || '').toUpperCase();
+            if (/U\+E[0-9A-F]{3}|U\+F[0-8][0-9A-F]{2}/.test(range)) {
+              iconFamilies.add(fam.toLowerCase());
+            }
+          }
           if (!r.style.fontDisplay && noDisp < 3) {
             noDisp++;
             out.push({ issueType:'noFontDisplay', severity:'medium', selector:`@font-face[${fam}]`,
@@ -127,15 +154,19 @@ viewportSensitive: false
     walk(rules);
   }
 
-  // 7. Font consistency on page
+  // 7. Font consistency on page — exclude icon fonts via structural signal
+  // (no hardcoded "Material Icons" list — uses unicodeRange PUA detection above)
   const pageFamilies = new Set();
   for (const el of sample) {
     const f = getComputedStyle(el).fontFamily.split(',')[0].replace(/['"]/g, '').trim().toLowerCase();
-    if (f) pageFamilies.add(f);
+    if (!f) continue;
+    if (iconFamilies.has(f)) continue;   // skip detected icon fonts
+    pageFamilies.add(f);
   }
-  if (pageFamilies.size > 3) {
+  const MAX_TEXT_FAMILIES = 5;   // was 3 — too noisy for real apps (Material UI, Tailwind UI, etc.)
+  if (pageFamilies.size > MAX_TEXT_FAMILIES) {
     out.push({ issueType:'tooManyFontFamilies', severity:'low', selector:'body',
-      description:`Page uses ${pageFamilies.size} font families: ${[...pageFamilies].slice(0,5).join(', ')}. Design systems typically use 2–3.` });
+      description:`Page uses ${pageFamilies.size} non-icon font families: ${[...pageFamilies].slice(0,5).join(', ')}. Most apps use 2-4 (icon fonts excluded via unicode-range PUA signature).` });
   }
 
   // 8. Real WCAG contrast ratio
@@ -188,14 +219,24 @@ viewportSensitive: false
       description:`Page has ${h1n} <h1> elements — should have exactly one primary heading.` });
   }
   let prev = 0, skips = 0;
+  let prevHText = '';
   for (const h of headings) {
     const lvl = +h.tagName[1];
     if (prev > 0 && lvl > prev + 1 && skips < 3) {
       skips++;
-      out.push({ issueType:'headingSkip', severity:'low', selector:sel(h),
-        description:`Heading hierarchy skips H${prev} → H${lvl} (skipped H${prev+1}).`, bbox:bb(h) });
+      // Find nearest landmark to make finding actionable
+      const landmark = h.closest('main,section,article,aside,nav,header,footer,[role="region"],[role="main"]');
+      const landmarkLabel = landmark ? (landmark.getAttribute('aria-label') || landmark.tagName.toLowerCase()) : 'page';
+      const hText = (h.innerText || '').trim().slice(0, 40);
+      out.push({
+        issueType: 'headingSkip', severity: 'low', selector: sel(h),
+        description: `Heading hierarchy skips H${prev} → H${lvl} (skipped H${prev+1}) in <${landmarkLabel}>. ` +
+                     `Previous heading: "${prevHText.slice(0,40)}". Current heading: "${hText}".`,
+        bbox: bb(h)
+      });
     }
     prev = lvl;
+    prevHText = (h.innerText || '').trim();
   }
 
   // 10. Link styling (text-decoration removal)
@@ -328,11 +369,25 @@ viewportSensitive: false
     }
   }
 
-  // 19. Font preload missing
-  const preloaded = [...document.querySelectorAll('link[rel="preload"][as="font"]')].length;
-  if (preloaded === 0 && declaredFamilies.size > 0) {
+  // 19. Font preload missing AND CORS-missing on existing preloads
+  const preloadLinks = [...document.querySelectorAll('link[rel="preload"][as="font"]')];
+  if (preloadLinks.length === 0 && declaredFamilies.size > 0) {
     out.push({ issueType:'noFontPreload', severity:'low', selector:'head',
       description:`${declaredFamilies.size} custom font(s) declared but none preloaded — add <link rel="preload" as="font" type="font/woff2" crossorigin> for above-the-fold fonts.` });
+  }
+  // CORS-missing: browsers SILENTLY REFUSE the preloaded font without crossorigin attribute.
+  // No console warning. Font appears "loaded" via the standard request, but the preload is wasted.
+  let corsMissingN = 0;
+  for (const link of preloadLinks) {
+    if (corsMissingN >= 3) break;
+    if (!link.hasAttribute('crossorigin')) {
+      corsMissingN++;
+      const href = (link.href || link.getAttribute('href') || '').split('/').pop().slice(0, 60);
+      out.push({
+        issueType: 'corsFontPreloadMissing', severity: 'medium', selector: 'link[rel="preload"][as="font"]',
+        description: `Font preload <link href="...${href}"> is missing the crossorigin attribute. Browsers silently refuse the preloaded font — preload is wasted; font is re-fetched. Add crossorigin="anonymous".`
+      });
+    }
   }
 
   // 20. Mixed-content fonts (HTTPS page, HTTP @font-face src)
@@ -366,15 +421,259 @@ viewportSensitive: false
       description:`Paragraphs use ${lhMap.size} different line-height ratios (${[...lhMap.keys()].join(', ')}) — vertical rhythm is inconsistent.` });
   }
 
+  // 22. Variable font validation — font-variation-settings vs FontFace weight range
+  // FontFace.weight returns "100 900" (range) for variable, "400" (single) for static.
+  try {
+    for (const ff of document.fonts) {
+      if (ff.weight && /^\s*\d+\s+\d+\s*$/.test(ff.weight)) {
+        // Range format = variable font
+        const [a, b] = ff.weight.trim().split(/\s+/).map(Number);
+        variableFonts.set((ff.family || '').replace(/['"]/g, '').toLowerCase(), { wMin: Math.min(a,b), wMax: Math.max(a,b) });
+      }
+    }
+  } catch (_) {}
+  let varN = 0;
+  for (const sheet of document.styleSheets) {
+    if (varN >= 4) break;
+    let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+    if (!rules) continue;
+    const vwalk = (rs) => {
+      for (const r of rs) {
+        if (varN >= 4) return;
+        if (r.type === CSSRule.MEDIA_RULE) { vwalk(r.cssRules || []); continue; }
+        if (r.type !== CSSRule.STYLE_RULE || !r.style) continue;
+        const fvs = r.style.fontVariationSettings;
+        if (!fvs || fvs === 'normal') continue;
+        const famFromRule = (r.style.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase();
+        if (!famFromRule) continue;
+        const vf = variableFonts.get(famFromRule);
+        if (!vf) {
+          varN++;
+          out.push({
+            issueType: 'variableFontUnsupported', severity: 'low',
+            selector: (r.selectorText || '').slice(0, 100),
+            description: `font-variation-settings "${fvs}" declared but "${famFromRule}" is not a variable font (FontFace.weight is not a range). Settings have no effect.`
+          });
+          continue;
+        }
+        // Check 'wght' axis specifically
+        const wghtMatch = fvs.match(/['"]?wght['"]?\s+(\d+)/i);
+        if (wghtMatch) {
+          const requested = parseInt(wghtMatch[1]);
+          if (requested < vf.wMin || requested > vf.wMax) {
+            varN++;
+            out.push({
+              issueType: 'variableFontOutOfRange', severity: 'medium',
+              selector: (r.selectorText || '').slice(0, 100),
+              description: `font-variation-settings 'wght' ${requested} is outside "${famFromRule}"'s axis range [${vf.wMin}-${vf.wMax}] — browser clamps silently to ${requested < vf.wMin ? vf.wMin : vf.wMax}.`
+            });
+          }
+        }
+      }
+    };
+    vwalk(rules);
+  }
+
+  // 23. Font payload metrics — count + total bytes via Resource Timing API
+  try {
+    const resources = performance.getEntriesByType('resource');
+    const fontRes = resources.filter(r => {
+      const url = r.name || '';
+      const type = (r.initiatorType || '').toLowerCase();
+      return type === 'font' || /\.(woff2?|ttf|otf|eot)(\?|#|$)/i.test(url);
+    });
+    const fontCount = fontRes.length;
+    const fontBytes = fontRes.reduce((sum, r) => sum + (r.encodedBodySize || r.transferSize || 0), 0);
+    const fontKB = Math.round(fontBytes / 1024);
+    if (fontCount > 4) {
+      out.push({
+        issueType: 'fontPayloadCount', severity: 'low', selector: 'head',
+        description: `Page loaded ${fontCount} font files (recommended ≤ 4). Each blocks render until font-display swap; consider subsetting or fewer faces.`
+      });
+    }
+    if (fontKB > 300) {
+      out.push({
+        issueType: 'fontPayloadHeavy', severity: 'medium', selector: 'head',
+        description: `Total font payload ${fontKB} KB across ${fontCount} files (recommended ≤ 300 KB). Blocks LCP; reduces Web Vitals score. Subset fonts or drop unused weights.`
+      });
+    }
+  } catch (_) {}
+
+  // 24. Measure (line length) — flag paragraphs whose effective character-per-line
+  // is outside the readability range [45, 75]. Approximation: paragraph width ÷ (font-size × 0.5).
+  // 0.5 is the standard avg-glyph-width factor used in print typography.
+  let measureFlagged = 0;
+  for (const para of document.querySelectorAll('p, li, blockquote')) {
+    if (measureFlagged >= 5) break;
+    const txt = (para.innerText || '').trim();
+    if (txt.length < 60) continue;
+    const rect = para.getBoundingClientRect();
+    if (rect.width < 100 || rect.height < 20) continue;
+    const cs = getComputedStyle(para);
+    const fs2 = parseFloat(cs.fontSize) || 16;
+    const cpl = Math.round(rect.width / (fs2 * 0.5));
+    if (cpl > 90 || cpl < 30) {
+      measureFlagged++;
+      out.push({
+        issueType: cpl > 90 ? 'measureTooLong' : 'measureTooShort',
+        severity: 'low', selector: sel(para), bbox: bb(para),
+        description: `Measure (chars per line) ≈ ${cpl} — readability range is 45-75. ${cpl > 90 ? 'Too long: eye loses line at end' : 'Too short: rhythm broken, eye flicks back too often'}.`
+      });
+    }
+  }
+
+  // 25. Vertical-rhythm baseline-grid — line-height should land on an 8px (or 4px) baseline grid
+  // to keep adjacent blocks aligned. Computed line-height that is not an integer multiple of 4 with
+  // ≥10% rounding error is flagged.
+  let rhythmFlagged = 0;
+  for (const para of document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li')) {
+    if (rhythmFlagged >= 4) break;
+    const cs = getComputedStyle(para);
+    const lh = parseFloat(cs.lineHeight);
+    if (isNaN(lh) || lh < 8) continue;
+    const remainder = lh % 4;
+    const drift = Math.min(remainder, 4 - remainder);
+    if (drift > 0.4) { // > 10% off the 4px grid
+      rhythmFlagged++;
+      out.push({
+        issueType: 'baselineGridOff', severity: 'low', selector: sel(para),
+        description: `Computed line-height ${lh.toFixed(2)}px is off the 4px baseline grid by ${drift.toFixed(2)}px. Round to nearest multiple of 4 (or 8) for vertical alignment with adjacent UI.`
+      });
+    }
+  }
+
+  // 26. Paragraph density — large text regions with no <p>/<br>/<hr> breaks (wall of text).
+  for (const region of document.querySelectorAll('article, main, section, .content, .post, [role="article"], [role="main"]')) {
+    const txt = (region.innerText || '').trim();
+    if (txt.length < 1200) continue;
+    const breakCount = region.querySelectorAll('p, br, hr, h2, h3, h4, ul, ol, blockquote').length;
+    const charsPerBreak = breakCount > 0 ? txt.length / breakCount : txt.length;
+    if (charsPerBreak > 800) {
+      out.push({
+        issueType: 'wallOfText', severity: 'medium', selector: sel(region),
+        description: `Content region has ${txt.length} chars but only ${breakCount} structural breaks (~${Math.round(charsPerBreak)} chars per break). Add paragraph breaks, subheadings, or bullet lists every ~300-500 chars.`
+      });
+      break; // one finding per cell is enough
+    }
+  }
+
+  // 27. Widow detection — paragraph's last line has 1 word (a "widow").
+  // Use getClientRects() — each rect is a visual line. If the last rect width < 25% of the
+  // paragraph width AND the last word is < 12 chars, it's a widow.
+  let widowFlagged = 0;
+  for (const para of document.querySelectorAll('p')) {
+    if (widowFlagged >= 4) break;
+    const rects = para.getClientRects();
+    if (rects.length < 2) continue;
+    const last = rects[rects.length - 1];
+    const first = rects[0];
+    if (!last || !first) continue;
+    if (last.width / first.width > 0.25) continue;
+    const txt = (para.innerText || '').trim();
+    const words = txt.split(/\s+/);
+    const lastWord = words[words.length - 1] || '';
+    if (lastWord.length === 0 || lastWord.length > 14) continue;
+    widowFlagged++;
+    out.push({
+      issueType: 'widowLine', severity: 'low', selector: sel(para), bbox: bb(para),
+      description: `Paragraph ends with a widow (single short word "${lastWord}" on the last line). Adjust copy or use \`text-wrap: pretty\` / non-breaking space.`
+    });
+  }
+
+  // 28. Optical sizing — variable fonts gain readability from font-optical-sizing: auto.
+  // If body uses a variable font but optical-sizing is "none" (or unset and computed to "none"),
+  // emit a low-severity hint. Only flag once per page.
+  try {
+    let bodyVariableFont = null;
+    for (const ff of document.fonts) {
+      if (ff.weight && /^\s*\d+\s+\d+\s*$/.test(ff.weight)) {
+        const fam = (ff.family || '').replace(/['"]/g, '').toLowerCase();
+        const bodyFamily = (getComputedStyle(document.body).fontFamily || '').toLowerCase();
+        if (bodyFamily.includes(fam)) { bodyVariableFont = fam; break; }
+      }
+    }
+    if (bodyVariableFont) {
+      const bodyOS = getComputedStyle(document.body).fontOpticalSizing;
+      if (bodyOS && bodyOS !== 'auto') {
+        out.push({
+          issueType: 'noOpticalSizing', severity: 'low', selector: 'body',
+          description: `Body uses variable font "${bodyVariableFont}" but font-optical-sizing is "${bodyOS}". Set \`font-optical-sizing: auto\` for crisper rendering across sizes.`
+        });
+      }
+    }
+  } catch (_) {}
+
+  // 29. Drop-cap / pull-quote rendering — <blockquote> with no visual distinction from body
+  // (same font-size, no border, no italic, no quote marks) reads as plain paragraph.
+  let quoteFlagged = 0;
+  for (const bq of document.querySelectorAll('blockquote, q, .pullquote, .pull-quote, [role="blockquote"]')) {
+    if (quoteFlagged >= 3) break;
+    if (!bq.innerText || bq.innerText.trim().length < 30) continue;
+    const cs = getComputedStyle(bq);
+    const fs2 = parseFloat(cs.fontSize) || 16;
+    const bodyFs = parseFloat(getComputedStyle(document.body).fontSize) || 16;
+    const hasBorder = cs.borderLeftWidth && parseFloat(cs.borderLeftWidth) > 1;
+    const isItalic = (cs.fontStyle || '').includes('italic');
+    const hasMargin = parseFloat(cs.marginLeft) > 8 || parseFloat(cs.paddingLeft) > 8;
+    const sizeDiff = Math.abs(fs2 - bodyFs) > 1;
+    const hasQuoteContent = (cs.content || '').includes('"') || (cs.content || '').includes("'");
+    const distinct = hasBorder || isItalic || hasMargin || sizeDiff || hasQuoteContent;
+    if (!distinct) {
+      quoteFlagged++;
+      out.push({
+        issueType: 'unstyledPullQuote', severity: 'low', selector: sel(bq), bbox: bb(bq),
+        description: `<${bq.tagName.toLowerCase()}> renders identical to body copy (same size ${fs2}px, no border/italic/indent/quote marks). Reader cannot perceive it as a quotation.`
+      });
+    }
+  }
+
+  // 30. <html lang> presence — browser hyphenation, quote orientation, and SR voice all depend on it.
+  const htmlLang = document.documentElement.getAttribute('lang');
+  if (!htmlLang || !htmlLang.trim()) {
+    out.push({
+      issueType: 'missingHtmlLang', severity: 'medium', selector: 'html',
+      description: 'Missing <html lang="..."> attribute. Browsers cannot pick the right hyphenation rules, quote glyphs, or screen-reader voice. Add the page language (e.g. lang="en").'
+    });
+  } else if (!/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(htmlLang.trim())) {
+    out.push({
+      issueType: 'invalidHtmlLang', severity: 'low', selector: 'html',
+      description: `<html lang="${htmlLang}"> is not a valid BCP 47 language tag. Use a form like "en", "en-US", "ar-AE".`
+    });
+  }
+
+  // 31. Heading-hierarchy depth + structure audit.
+  // Two checks: (a) any heading deeper than H4 used as actual document structure (not just styling)
+  //             (b) heading tree without an H2 between H1 and H3+ (signals improvised hierarchy)
+  const allHeadings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+    .filter(h => h.innerText && h.innerText.trim() && getComputedStyle(h).display !== 'none');
+  if (allHeadings.length >= 3) {
+    const levels = allHeadings.map(h => parseInt(h.tagName.slice(1), 10));
+    const maxDepth = Math.max(...levels);
+    const hasH1 = levels.includes(1);
+    const hasH2 = levels.includes(2);
+    if (maxDepth >= 5) {
+      out.push({
+        issueType: 'deepHeadingHierarchy', severity: 'low', selector: 'body',
+        description: `Page uses H${maxDepth} (${levels.filter(l => l === maxDepth).length}×). 5+ levels of structural heading usually means design-only headings — switch to <p class="h-...">/aria-level=N or restructure.`
+      });
+    }
+    if (hasH1 && !hasH2 && levels.some(l => l >= 3)) {
+      out.push({
+        issueType: 'h2MissingInHierarchy', severity: 'low', selector: 'body',
+        description: `Heading tree has H1 and H${Math.min(...levels.filter(l => l >= 3))}+ but no H2. Screen-reader users get a broken outline. Insert H2 section headings before H3+.`
+      });
+    }
+  }
+
   return out;
 }
 ```
 
 ## Issue schema
 
-All 21 issue types use the canonical Issue schema:
+All 35 issue types use the canonical Issue schema:
 - `skill`: `qa-detect-typography-advanced`
-- `issueType`: one of the 21 listed above
+- `issueType`: one of the 35 listed above
 - `severity`: `high` | `medium` | `low` per the table
 - `selector`: CSS selector or descriptor (e.g., `@font-face[Foo]`)
 - `description`: human-readable explanation with concrete numbers

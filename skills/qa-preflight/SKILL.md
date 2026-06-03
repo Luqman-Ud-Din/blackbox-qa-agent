@@ -105,46 +105,45 @@ or
    To upgrade later: npm install -g @playwright/mcp@latest && claude mcp add playwright -- npx "@playwright/mcp@latest"
 ```
 
-### Check 2 — Local Node + Playwright + node_modules (BASH MODE ONLY)
+### Check 2 — Local Node (ALWAYS runs, MCP or Bash mode)
 
-**Skip entirely when MCP mode is active.** In MCP mode, the MCP server has its own Playwright; local install is irrelevant.
-
-When in Bash fallback mode, verify all of:
+The plugin's permanent scripts (`scripts/annotate-cell-prepare.cjs`, `scripts/annotate-cell-finalize.cjs`, `scripts/file-bugs.cjs`, etc.) are **pure Node, no external npm deps**. They run on the Node runtime alone.
 
 ```bash
 node --version          # must be >= 18
 ```
 If Node missing or < 18 → HARD STOP: "Install Node.js >= 18 from https://nodejs.org and re-run."
 
+That's it. **No `npm install` required for the main audit flow.** Annotation is MCP-driven (HTML built by Node script, rendered by MCP's browser, JSONL updated by Node script). ADO bug filing uses only Node built-ins (https, fs, path).
+
+#### Check 2.5 — node_modules (ONLY for Bash fallback mode + recovery tools)
+
+Skip this section in MCP mode unless the user is invoking `scripts/repair-bugs.cjs` (recovery tool — re-files bugs from a prior audit).
+
+When needed, verify:
 ```bash
 test -d "{project-root}/node_modules" && test -d "{project-root}/node_modules/@playwright/test"
 ```
-If `node_modules/` is missing OR `@playwright/test` is missing → **AUTO-INSTALL inline**:
-
+If missing → **AUTO-INSTALL inline**:
 ```
 ⚠ node_modules missing — auto-installing (one-time, ~60 seconds)...
 ```
-
-Run:
 ```bash
 cd "{project-root}" && npm install
 ```
-
-After successful install, verify `node_modules/@playwright/test/package.json` exists.
-
 If `npm install` fails:
 - Log the exact stderr (first 500 chars)
-- HARD STOP: "npm install failed. Check network and `package.json` integrity, then run `npm install` manually in {project-root}."
+- In MCP mode: log warning and continue (main audit flow doesn't need it).
+- In Bash fallback mode: HARD STOP: "npm install failed. Check network and `package.json` integrity, then run `npm install` manually in {project-root}."
 
+Final Bash-mode verification:
 ```bash
 npx playwright --version
 ```
-Final verification: should print the installed Playwright version. If this fails, browser binaries missing — run:
+Should print the Playwright version. If missing browser binaries:
 ```bash
 npx playwright install chromium firefox webkit
 ```
-
-Critical: all three checks (Node ≥ 18, node_modules present, Playwright version printable) must pass for Bash fallback mode to work.
 
 ### Check 3 — Server reachability (ALWAYS)
 

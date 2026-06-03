@@ -1,7 +1,7 @@
 /**
  * argus-schema.cjs — single source of truth for the Issue object schema.
  *
- * Every permanent script (file-bugs.cjs, annotate-cell.cjs, etc.) imports
+ * Every permanent script (file-bugs.cjs, annotate-cell-prepare.cjs, annotate-cell-finalize.cjs, etc.) imports
  * this module to validate findings before doing anything with them.
  *
  * If a finding fails validation, the writer THROWS. This prevents malformed

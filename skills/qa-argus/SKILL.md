@@ -140,7 +140,7 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 |---|------|------------------|
 | 1 | `{project-root}/.claude/automation.config.json` must exist and have �0�1 app in `apps[]` | Print: "HARD STOP � AUTO-INVOKE qa-argus-setup inline. Only hard-stop AFTER the wizard runs AND still fails to produce a valid config. Never hard-stop on first-run missing-config — that is a setup-wizard signal, not an error." |
 | 2 | When `dry_run = false`, missing ADO credentials are collected interactively at Step 1.5 � never hard-stop on credentials | Ask in Step 1.5, never abort |
-| 3 | **Permanent operational scripts under `scripts/` are the SOURCE OF TRUTH and must NEVER be regenerated.** The orchestrator INVOKES them, never overwrites them. Permitted permanent scripts: `scripts/ado-api.sh`, `scripts/annotate.js`, `scripts/annotate-cell.cjs`, `scripts/argus-schema.cjs`, `scripts/file-bugs.cjs`. Browser ops happen via Playwright MCP tools OR ephemeral `.cjs` files written under `.tmp/{runId}/` ONLY when no permanent script covers the operation. | If a permanent script exists for an operation, CALL IT. Regenerating a permanent script (especially `file-bugs.cjs`) is the historical root cause of empty ADO tickets and is BANNED. |
+| 3 | **Permanent operational scripts under `scripts/` are the SOURCE OF TRUTH and must NEVER be regenerated.** The orchestrator INVOKES them, never overwrites them. Permitted permanent scripts: `scripts/ado-api.sh`, `scripts/annotate-cell-prepare.cjs`, `scripts/annotate-cell-finalize.cjs`, `scripts/argus-schema.cjs`, `scripts/file-bugs.cjs`, `scripts/repair-bugs.cjs`. Browser ops happen via Playwright MCP tools OR ephemeral `.cjs` files written under `.tmp/{runId}/` ONLY when no permanent script covers the operation. | If a permanent script exists for an operation, CALL IT. Regenerating a permanent script (especially `file-bugs.cjs`) is the historical root cause of empty ADO tickets and is BANNED. |
 | 4 | **Probe expressions inside SKILL.md ARE allowed.** They are skill specifications consumed by `browser_evaluate` (MCP) or copied into ephemeral .cjs (Bash). `.cjs` and `.js` files inside `skills/*/` (other than the two listed above) are NOT permitted | Probes live as code blocks inside SKILL.md, not as separate files in skill folders |
 | 5 | **NEVER use bash heredoc to embed Node scripts.** `node - <<EOF`, `node -e "..."`, and similar patterns are BANNED. They corrupt JS template literals (backticks, `$`, quotes) on Windows and are fragile on macOS/Linux. ALWAYS use the Write tool to create a `.cjs` file, then `node "{abs-path}"`. | Write �  Bash run, never inline heredoc |
 | 6 | NEVER access any path outside `{project-root}` | Confine all reads/writes/subprocesses to `{project-root}/.claude/` and `{project-root}/.tmp/` |
@@ -161,7 +161,7 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 | `--dry-run` | flag | Detect issues only; do not file ADO bugs (overrides config) |
 | `--no-vision` | flag | Skip vision review step even if enabled in customize.toml |
 | `--rules <list>` | csv | Run only the listed detector/skill names (comma-separated) |
-| `--setup` | flag | Jump directly to /qa-setup before running |
+| `--setup` | flag | Jump directly to /qa-argus-setup before running |
 | `--resume <runId>` | string | Skip cells whose `{runId}/issues/{cellId}.jsonl` already exists. Use after a hang/crash to continue from where the previous run died (added 2026-06-02). |
 | `--no-batching` | flag | Disable `[resilience].batch_size` chunking and run all cells in one Sonnet dispatch. Risks ~10-min API timeout on audits > 30 cells. |
 | `--no-resilience` | flag | Disable all `[resilience]` timeouts and budgets. Restores pre-2026-06-02 behavior. **Only for debugging.** |
@@ -170,16 +170,14 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 
 ## Registered Skills
 
-Claude reads each skill's `SKILL.md` at runtime � names only listed here.
+Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
-- **Pipeline (8):** `qa-argus`, `qa-argus-setup`, `qa-argus-ready`, `qa-preflight`, `qa-route-discovery`, `qa-phase-strategy`, `qa-bug-filer`, `qa-coverage-report`
-- **Detection (35):** `qa-detect-a11y`, `qa-detect-breakpoint-boundary`, `qa-detect-console-errors`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-forced-colors`, `qa-detect-form-a11y`, `qa-detect-form-autocomplete`, `qa-detect-form-captcha`, `qa-detect-form-csrf`, `qa-detect-form-error-summary`, `qa-detect-form-validation`, `qa-detect-forms`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-word-break`, `qa-detect-zoom-200`
-- **Functional (28):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-form-boundaries`, `qa-test-form-combobox`, `qa-test-form-conditional`, `qa-test-form-datetime`, `qa-test-form-file-upload`, `qa-test-form-formatted-inputs`, `qa-test-form-inline-edit`, `qa-test-form-input-mask`, `qa-test-form-otp`, `qa-test-form-password-rules`, `qa-test-form-realtime`, `qa-test-form-special-chars`, `qa-test-form-submit-state`, `qa-test-form-tag-input`, `qa-test-form-wizard`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
-- **Review (3):** `qa-review-content` (visible text), `qa-review-hidden-text` (placeholders/alt/title/aria), `qa-vision-review` (multimodal screenshot review)
-- **Total: 74 skills**
-- **Detection (35):** `qa-detect-overflow`, `qa-detect-typography`, `qa-detect-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-forms`, `qa-detect-a11y`, `qa-detect-loading`, `qa-detect-console-errors`, `qa-detect-network-errors`, `qa-detect-form-validation`, `qa-detect-reflow`, `qa-detect-breakpoint-boundary`, `qa-detect-zoom-200`, `qa-detect-responsive-images`, `qa-detect-orientation`, `qa-detect-form-autocomplete`, `qa-detect-form-csrf`, `qa-detect-form-a11y`, `qa-detect-form-captcha`, `qa-detect-form-error-summary`, `qa-detect-dropdown-viewport-clip`, `qa-detect-sticky-scroll`, `qa-detect-modal-viewport-fit`, `qa-detect-hover-touch`, `qa-detect-overflow-controls`, `qa-detect-word-break`, `qa-detect-reduced-motion`, `qa-detect-forced-colors`, `qa-detect-viewport-meta`, `qa-detect-safe-area`, `qa-detect-rtl-layout`, `qa-detect-dark-mode`, `qa-detect-mobile-keyboard`, `qa-detect-typography-advanced`
-- **Functional (27):** `qa-test-navigation`, `qa-test-auth-flow`, `qa-test-data-controls`, `qa-test-widgets`, `qa-test-states`, `qa-test-history`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-dragdrop`, `qa-test-i18n`, `qa-test-theme`, `qa-test-cases`, `qa-test-form-boundaries`, `qa-test-form-special-chars`, `qa-test-mobile-nav`, `qa-test-form-realtime`, `qa-test-form-password-rules`, `qa-test-form-conditional`, `qa-test-form-file-upload`, `qa-test-form-wizard`, `qa-test-form-submit-state`, `qa-test-form-datetime`, `qa-test-form-formatted-inputs`, `qa-test-form-otp`, `qa-test-form-combobox`, `qa-test-form-inline-edit`, `qa-test-form-tag-input`, `qa-test-form-input-mask`
-- **Review (2):** `qa-review-content` — Sonnet-tier; spelling/grammar/word choice/placeholder/untranslated/encoding/markdown in visible page text. `qa-review-hidden-text` — Sonnet-tier; same checks for text hidden in placeholder/alt/title/aria-label/value attributes and select options
+- **Pipeline (8):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
+- **Detection (36):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
+- **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
+- **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
+- **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
+- **Total: 66 skills**
 
 ---
 
@@ -223,7 +221,7 @@ LOG: "�x� Step 0: Setup check"
 2. If the file does not exist �  **AUTO-INVOKE** the setup wizard inline: log `🔧 First-time setup detected — running setup wizard automatically...`, read `{skill-root}/../qa-argus-setup/SKILL.md` and execute it inline, then re-read `automation.config.json`. If still missing after wizard completes → THEN hard-stop: `"Setup wizard did not produce automation.config.json. Run /qa-argus-setup manually to diagnose."` Otherwise continue to Step 0.5 with the user's original task.
 3. If `apps` array is empty or missing �  **AUTO-INVOKE** the setup wizard inline (same flow as step 2): execute `qa-argus-setup`, re-read `automation.config.json`, continue to Step 0.5 on success. Do NOT hard-stop on missing apps[].
 4. If `dry_run = false` in customize.toml AND `ado.org === "YOUR_ADO_ORG"` �  **AUTO-INVOKE** the setup wizard in ADO-only mode: log `🔧 ADO credentials needed — collecting now...`, run the wizard's ADO collection block (Step A + Step B from `qa-argus-setup/SKILL.md`), then re-read `automation.config.json` and `secrets.json`. On success continue to Step 0.5. Do NOT hard-stop. Only hard-stop if the user explicitly cancels the wizard.
-5. If `--setup` flag was passed �  invoke `/qa-setup` and exit.
+5. If `--setup` flag was passed �  invoke `/qa-argus-setup` and exit.
 
 ---
 
@@ -360,6 +358,28 @@ Export as env var: `HEADLESS=true` or `HEADLESS=false`
 #### Final Config Object
 
 After merging, hold `resolvedConfig` in memory with these fields: `apps`, `browsers`, `workers` (browsers.length�4), `headless`, `dryRun`, `viewports`, `pinnedRoutes`, `skippedRoutes`, `visionReview`, `enabledDetectors`, `enabledFunctionalTests`, `runLabel`.
+**Content-context wiring (must happen on EVERY cell dispatch):**
+
+`resolvedConfig.content` is merged from `automation.config.json → content` + `customize.toml → [content]`. Defaults: `proper_nouns: [appName]`, `languages: ["en"]`, `legal_routes: ["/privacy","/terms","/legal","/cookie","/refund","/shipping","/gdpr","/ccpa","/data-processing"]`, `english_only: true`, `enable_reading_level: true`, `enable_legal_mode: true`.
+
+When invoking `qa-detect-content-patterns`, wrap the probe in an IIFE and pass the arg:
+```js
+browser_evaluate({
+  function: "(ctx)=>(...probe IIFE...)(ctx)",
+  arg: {
+    properNouns: resolvedConfig.content.proper_nouns,
+    englishOnly: resolvedConfig.content.english_only,
+    enableReadingLevel: resolvedConfig.content.enable_reading_level
+  }
+})
+```
+
+When invoking `qa-review-content`, build the Sonnet sub-agent context from:
+- `properNouns`: `resolvedConfig.content.proper_nouns`
+- `candidateMisspellings`: filter cell findings where `skill === "qa-detect-content-patterns"` AND `issueType === "candidateMisspelling"` → `[{word, snippet}, …]`
+- `homophoneCandidates`: same filter for `issueType === "homophoneCandidate"`
+- `mode`: `resolvedConfig.content.legal_routes.some(p => cell.route.toLowerCase().includes(p.toLowerCase())) ? "legal" : "standard"`. When `mode === "legal"`, use the **legal-mode prompt** block from `qa-review-content/SKILL.md`. Legal-mode cells are uncapped by `grammar.max_cells` — compliance is mandatory.
+
 
 Log the resolved config summary (mask any passwords).
 
@@ -742,7 +762,7 @@ For each cell (route � viewport � browser):
        then evaluating probes to check the resulting state.
   h. **Evidence capture — DETERMINISTIC, no code generation allowed.**
 
-       🚨 **PRODUCTION RULE:** Do NOT compose annotate.js calls from the orchestrator. Do NOT write a per-cell .cjs that does annotation. Use the permanent script `scripts/annotate-cell.cjs` — it reads the cell's already-written JSONL and produces the annotated screenshot from validated data. No field-name mismatches possible.
+       🚨 **PRODUCTION RULE:** Do NOT compose chromium calls from the orchestrator. Do NOT write a per-cell .cjs that does annotation. The annotation pipeline is **MCP-driven** — two permanent Node scripts handle HTML generation + JSONL update, MCP renders. Zero local Playwright dependency, works on every plugin install.
 
        The orchestrator's job at step (h) is only TWO operations:
 
@@ -775,17 +795,29 @@ For each cell (route � viewport � browser):
 
        The annotation itself runs in step (h.3), **after** step (j) writes the JSONL:
 
-       (h.3) After JSONL is written for the cell, invoke the permanent annotator:
+       (h.3) After JSONL is written for the cell, run the MCP-driven annotation pipeline — three sub-steps:
+
+           **(h.3.a) Build HTML (pure Node, no MCP):**
            ```
-           node "{project-root}/scripts/annotate-cell.cjs" "{runId}" "{cell.id}"
+           node "{project-root}/scripts/annotate-cell-prepare.cjs" "{runId}" "{cell.id}"
            ```
-           This script:
-             - Reads the cell's JSONL
-             - Validates every finding against the canonical schema (scripts/argus-schema.cjs)
-             - Calls scripts/annotate.js with the correct field names and full description data
-             - Produces `{cell.id}-annotated.png` with numbered markers on the screenshot and a descriptive legend below
-             - Updates every line in the JSONL with `screenshotPath` and `annotatedScreenshotPath`
-           If `annotate-cell.cjs` exits non-zero, the run is degraded — print the error and continue. The base screenshot is still on disk and `file-bugs.cjs` will attach it as fallback.
+           Exit 0 → prints `{"htmlPath":"…","fileUrl":"file:///…","expectedAnnotatedPath":"…","findingCount":N}` on stdout. Parse it.
+           Exit 5 → cell had no findings; skip remaining (h.3) steps.
+           Exit 2/3/4 → base PNG missing / JSONL missing / schema fail; log and skip.
+
+           **(h.3.b) Render via MCP (zero local chromium):**
+           ```
+           browser_navigate(url = <fileUrl>, waitUntil = "load", timeout = 10000)
+           browser_take_screenshot(path = <expectedAnnotatedPath>, fullPage = true)
+           ```
+
+           **(h.3.c) Update JSONL (pure Node):**
+           ```
+           node "{project-root}/scripts/annotate-cell-finalize.cjs" "{runId}" "{cell.id}"
+           ```
+           Reads the annotated PNG, writes `annotatedScreenshotPath` into every finding atomically. Idempotent.
+
+           If any sub-step exits non-zero, the run is degraded — log the error and continue. Step 5.7.5 sweep will retry the cell at the end. `file-bugs.cjs` falls back to the base screenshot if no annotated PNG exists.
 
        Color scale used by the annotator:
            critical=#b91c1c, high=#ef4444, medium=#f97316, low=#3b82f6
@@ -811,10 +843,120 @@ For each cell (route � viewport � browser):
        Cells 1-3 of run qa-20260602-005 were lost because findings were buffered until cell end
        and the cell-004 hang killed the process before any disk write occurred.
 
+       **CROSS-SKILL DEDUPLICATION (v2.4.0, added 2026-06-03) — MUST RUN BEFORE THE APPEND BELOW.**
+
+       Before writing the cell's findings to JSONL, run cross-skill deduplication in-orchestrator (no MCP call, no LLM call — pure logic, cost $0).
+
+       **Why this exists:** the agent has 66 skills. Many emit findings on the same DOM element from different angles. Without dedup, one broken button generates 4 ADO tickets and devs lose trust. This step collapses duplicates into a single finding annotated with which skills also caught it. Typical impact: -40 to -60% ticket count with zero coverage loss.
+
+       **Skip rule:** if `customize.toml -> [dedup].enabled = false`, skip this step entirely. Default is `true`.
+
+       **Algorithm:**
+
+       (1) For each finding emitted in this cell, compute a signature:
+       ```
+       signature = normalizeSelector(finding.selector)
+                 + '|' + issueFamily(finding.issueType)
+                 + '|' + roundBbox(finding.bbox, gridPx = dedup.bbox_grid_px)
+       ```
+
+       (2) Group all findings into buckets by signature.
+
+       (3) For each bucket containing > 1 finding:
+            - Sort by (severity desc — critical > high > medium > low > info; then confidence desc; then selector specificity desc)
+            - winner = bucket[0]
+            - winner.alsoDetectedBy = unique skills of bucket[1..n], excluding winner.skill
+            - winner.alsoIssueTypes = unique issueTypes of bucket[1..n], excluding winner.issueType
+            - winner.description = winner.description + ' (also detected by: ' + alsoDetectedBy.join(', ') + ')'
+            - winner.dedupCount = bucket.length
+            - Drop bucket[1..n] from the emission list
+
+       (4) Buckets with exactly 1 finding pass through unchanged with `dedupCount = 1`, `alsoDetectedBy = []`.
+
+       **normalizeSelector(selector)** — strip generated class hashes so CSS-in-JS frameworks don't break dedup:
+       ```
+       Input                              Output
+       "button.css-1lkthfn"             -> "button.css"
+       "button.MuiButton-root-12"        -> "button.MuiButton-root"
+       ".btn-7f3a2x4"                    -> ".btn"
+       "div#user-2358ac > p.text"        -> "div#user > p.text"
+       ".css-abc123def"                  -> ".css"
+       "#main"                           -> "#main"  (IDs untouched — stable)
+       ```
+       Pattern: strip trailing `-[a-z0-9]{6,}` or `_[a-z0-9]{6,}` from each class-name segment. IDs (`#xxx`) and tag names are untouched.
+
+       **issueFamily(issueType)** — consult `customize.toml -> [dedup.families]` (extends built-in defaults). Each issueType maps to ONE family. Two findings with the same family + selector + bbox region are duplicates.
+
+       Built-in family map:
+       ```
+       touch_target:    [touchTargetTooSmall, inputHeightTooSmall, criticalElementHidden]
+       labeling:        [fieldWithoutLabel, buttonUnnamed, requiredNotIndicated,
+                          ariaLabelMissing, missingAlt, imageMissingAlt]
+       validation:      [noValidationOnEmptySubmit, submitNotDisabledWhenInvalid,
+                          noRealtimeValidation, whitespaceAccepted, noEmailValidation]
+       overflow:        [horizontalOverflow, fixedElementOverflow, tableOverflow,
+                          contentTooNarrow, rtlPageOverflow, rtlElementOverflow]
+       hierarchy:       [noH1, multipleH1, headingHierarchyBroken, focusOrderMismatch]
+       contrast:        [colorContrastIssue, darkModeContrastFail, textContrastInsufficient,
+                          forcedColorsBreaksLayout]
+       loading:         [stuckSpinner, blankPage, skeletonStuckAfterLoad,
+                          loadingSpinnerOverlapsContent, loadingIndicatorMissing]
+       security:        [csrfTokenMissing, autocompleteOffAntiPattern, captchaMissingOnSignup]
+       images:          [missingAlt, brokenImage, imageStretched, imageOversizedForViewport]
+       typography:      [smallFont, tightLineHeight, oversizedHeading, longWordNoBreak]
+       motion:          [motionIgnoresReducedPref, parallaxOnReducedMotion]
+       breakpoint:      [breakpointEdgeBreaks, breakpointTransitionShift, breakpointMissingMatch]
+       ```
+       Unmapped issueTypes use the issueType itself as the family (so they only dedup against exact same issueType + selector).
+
+       **roundBbox(bbox, gridPx)** — round element coordinates to a grid so 'same region' overlaps merge:
+       ```
+       roundBbox({x:103, y:251, w:80, h:32}, 10) -> "100,250,80,30"
+       roundBbox(null, 10)                       -> "null"
+       ```
+       Two findings with same selector but different bbox regions (page-level vs element-level) remain distinct.
+
+       **Cross-family merge at same element:**
+       When `[dedup].cross_family_at_same_element = true` (default), findings on the EXACT same selector + bbox region merge regardless of family. The winner is picked by severity. This is what catches the "one broken button, 4 different tickets" case.
+
+       **Example — before and after dedup:**
+
+       Before (step i emitted 4 findings on the login button):
+       ```
+       {skill:"qa-detect-touch",      issueType:"touchTargetTooSmall",        severity:"medium", selector:"button.btn-7f3a2x4"}
+       {skill:"qa-form-a11y",         issueType:"fieldWithoutLabel",          severity:"high",   selector:"button.btn-7f3a2x4"}
+       {skill:"qa-detect-a11y",       issueType:"buttonUnnamed",              severity:"high",   selector:"button.btn-7f3a2x4"}
+       {skill:"qa-form-validation",   issueType:"submitNotDisabledWhenInvalid", severity:"medium", selector:"button.btn-7f3a2x4"}
+       ```
+
+       After dedup (all 4 share normalizeSelector("button.btn-7f3a2x4") = "button.btn" + same bbox region):
+       ```
+       {skill:"qa-form-a11y", issueType:"fieldWithoutLabel", severity:"high",
+        selector:"button.btn-7f3a2x4",
+        description:"Button has no accessible label (also detected by: qa-detect-a11y, qa-detect-touch, qa-form-validation)",
+        alsoDetectedBy:["qa-detect-a11y", "qa-detect-touch", "qa-form-validation"],
+        alsoIssueTypes:["buttonUnnamed", "touchTargetTooSmall", "submitNotDisabledWhenInvalid"],
+        dedupCount:4}
+       ```
+
+       4 ADO tickets become 1, with full attribution preserved.
+
+       **Hard rules:**
+
+       1. Dedup is cell-scoped. Findings from different cells are NEVER merged here — that's a separate concern in qa-bug-filer.
+       2. Information is PRESERVED, not destroyed. `alsoDetectedBy` and `alsoIssueTypes` keep every contribution visible.
+       3. Winner is ALWAYS the highest-severity finding in the bucket. No promotion of low above high.
+       4. Singletons (buckets of size 1) pass through unchanged with `dedupCount = 1`, `alsoDetectedBy = []`.
+       5. Screenshot + annotation in step (h) uses the WINNER's selector and bbox only. No extra screenshots for dropped findings.
+       6. Track `dedupCount` per cell — emit in run-summary.json so the coverage report can show "X tickets reduced to Y after dedup".
+
+       **AFTER dedup completes, proceed to the append below with the deduped finding set.**
+
        Append findings to {project-root}/.tmp/{runId}/issues/{cell.id}.jsonl
        � one JSON object per line, schema:
        {runId, cellId, skill, issueType, severity, route, viewport,
-        viewportClass, browser, selector, description, bbox, screenshotPath, annotatedScreenshotPath}
+        viewportClass, browser, selector, description, bbox, screenshotPath, annotatedScreenshotPath,
+        dedupCount, alsoDetectedBy[], alsoIssueTypes[]}
 ```
 
 #### 5.5 � Escalation rule (Haiku �  Sonnet)
@@ -837,6 +979,55 @@ After running the base cell's skills, for each tab label:
 After each cell:
 - Close any opened browser context if MCP mode requires explicit cleanup (most MCP servers manage this automatically)
 - Stream a progress line: `[cell {n}/{total}] {route} @ {viewport}/{browser} �  {findingsCount} findings`
+
+#### 5.7.5 — Annotation Sweep (MANDATORY, code-enforced)
+
+After Step 5.7 closes for the LAST cell, run the annotation sweep BEFORE Step 5.8. This is the guarantee that every cell with findings ends up with annotated screenshots — even if Step 5.4(h.3)'s inline call was skipped, retried, or interrupted by a cellTimeout.
+
+🚨 **DO NOT SKIP THIS STEP.** Annotation is a plugin promise — end users install this plugin expecting annotated screenshots in their ADO tickets. The inline call in Step 5.4(h.3) is best-effort; this sweep is the contract.
+
+**Algorithm — MCP-driven, three sub-steps per cell.** For every `cell-*.jsonl` file in `{project-root}/.tmp/{runId}/issues/`:
+
+```
+list = glob "{project-root}/.tmp/{runId}/issues/cell-*.jsonl"
+
+for cellId in list:
+  # 1a. Build HTML (pure Node)
+  result = Bash("node scripts/annotate-cell-prepare.cjs {runId} {cellId}")
+  if result.exitCode == 5: continue       # cell has no findings
+  if result.exitCode != 0:  log + continue
+  paths = JSON.parse(result.stdout)
+
+  # 1b. Render via MCP (no local chromium)
+  browser_navigate({ url: paths.fileUrl, waitUntil: "load" })
+  browser_take_screenshot({ path: paths.expectedAnnotatedPath, fullPage: true })
+
+  # 1c. Update JSONL (pure Node)
+  result = Bash("node scripts/annotate-cell-finalize.cjs {runId} {cellId}")
+  if result.exitCode != 0: log + continue
+```
+
+Behavior:
+- **Idempotent:** re-running on a cell whose findings already have `annotatedScreenshotPath` is a no-op. Both prepare + finalize handle the case gracefully.
+- prepare exits: 0 = HTML written; 2 = base PNG missing; 3 = JSONL missing; 4 = schema fail; 5 = no findings (skip).
+- finalize exits: 0 = updated (or no-op); 2 = annotated PNG missing (MCP screenshot failed); 3 = JSONL missing; 4 = schema fail.
+- **Do not abort the sweep on a single cell failure.** Log the cellId + exit code and continue. The Step 7 validation gate surfaces any cell that still lacks annotations.
+
+Log per cell:
+```
+[annotate {n}/{total}] cell-{id} — {newAnnotations}/{findingsCount} screenshots
+```
+
+Log at end of sweep:
+```
+✅ Annotation sweep complete
+   Cells processed : {n}
+   Newly annotated : {newCount}
+   Already done    : {skippedCount}
+   Failed          : {failedCount}  ({failedCellIds})
+```
+
+If `failedCount > 0`, the run is degraded but not aborted. Step 7's validation gate handles the consequence.
 
 #### 5.8 � Run summary
 
@@ -910,6 +1101,27 @@ If `dryRun = true` in the resolved config, log:
 ```
 �x�� Dry-run mode � bug filing skipped (set dry_run = false in customize.toml to file real bugs)
 ```
+
+**Annotation validation gate (run BEFORE invoking bug filer):**
+
+Scan every `{project-root}/.tmp/{runId}/issues/cell-*.jsonl` line and check that each finding has a non-empty `annotatedScreenshotPath`. If any finding is missing it:
+
+1. Re-run the annotation sweep from Step 5.7.5 for those specific cell IDs only.
+2. Re-scan. If findings are still missing `annotatedScreenshotPath`:
+   - If `screenshotPath` is present, the bug filer will attach the base PNG as fallback (degraded mode).
+   - If `screenshotPath` is also missing, the cell had no screenshot at all — log a warning and let the bug filer file the bug text-only.
+3. Log the gate result:
+
+```
+🔍 Annotation gate
+   Findings total      : {n}
+   Annotated           : {annotatedCount}
+   Repaired by sweep   : {repairedCount}
+   Degraded (base PNG) : {degradedCount}
+   Missing all         : {missingCount}
+```
+
+This gate is **mandatory and code-enforced**. It cannot be skipped by orchestrator reasoning.
 
 Otherwise, read `{skill-root}/../qa-bug-filer/SKILL.md` and execute its instructions fully.
 

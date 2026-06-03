@@ -1,7 +1,7 @@
 {
   "name": "argus-qa",
-  "version": "1.0.0",
-  "description": "Argus — Autonomous UI Auditor Claude Code plugin. Crawls every route, viewport and browser. Detects layout, accessibility, form, network and console issues.",
+  "version": "2.0.0",
+  "description": "Argus — Autonomous UI Auditor Claude Code plugin. MCP-driven annotation, ADO bug filing, 66 detection/functional skills.",
   "author": "argus-qa",
   "license": "MIT",
   "keywords": [
@@ -18,18 +18,17 @@
   "files": [
     ".claude-plugin",
     "skills",
+    "scripts",
     "README.md"
   ],
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {
-    "@playwright/test": "^1.60.0"
-  },
-  "devDependencies": {
-  },
-  "peerDependencies": {
+  "dependencies": {},
+  "devDependencies": {},
+  "optionalDependencies": {
     "@playwright/test": "^1.40.0"
   },
-  "private": true
+  "private": true,
+  "_dependencyNote": "Main audit flow uses MCP for browser ops + pure-Node scripts. @playwright/test is OPTIONAL — only needed for scripts/repair-bugs.cjs (a recovery tool for re-filing bugs from prior audits). Bash-fallback mode also benefits from it."
 }

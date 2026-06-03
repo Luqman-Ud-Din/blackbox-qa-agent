@@ -14,7 +14,7 @@ Architecture (post 2026-06-01 refactor): skill-driven, Playwright-MCP-bridged, m
 | `{plugin-root}/.claude/` |  Config | `automation.config.json`, `qa-state.json`, `secrets.json` (gitignored) live here |
 | `{plugin-root}/.tmp/` |  Run output | All audit output goes here  routes.json, audit-plan.json, issues/, screenshots/ |
 | `{plugin-root}/skills/` |  Skills | **74 skills** — 8 pipeline + 35 detectors + 28 functional tests + 2 reviews + 1 vision review. Each has a `SKILL.md` (operating instructions + probe expressions). |
-| `{plugin-root}/scripts/` |  Utilities | `ado-api.sh` (ADO REST helper), `annotate.js` (screenshot overlay), `md-to-doc.cjs` (markdown→Word doc converter). New scripts go here. |
+| `{plugin-root}/scripts/` |  Utilities | `ado-api.sh` (ADO REST helper), `annotate-cell-prepare.cjs` + `annotate-cell-finalize.cjs` (MCP-driven annotation pipeline), `file-bugs.cjs` (ADO bug filer), `repair-bugs.cjs` (recovery tool), `argus-schema.cjs` (canonical schema). New scripts go here. |
 | Any path outside `{plugin-root}/` | L OFF-LIMITS | Never access unless explicitly reading a user-provided file path |
 
 ## Prior run state lives HERE  nowhere else

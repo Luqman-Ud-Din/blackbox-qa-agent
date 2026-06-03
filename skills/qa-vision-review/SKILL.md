@@ -317,6 +317,6 @@ The bug filer (Step 7) reads these findings from the cell JSONLs just like any o
 ## Notes
 
 - This skill ships with no external dependencies. The only requirement is that the orchestrator's Agent tool supports image inputs (Sonnet 4.6 does).
-- The skill does not modify any screenshots. Annotations (red boxes) are produced by `scripts/annotate.js` in Step 5.4 (h), not here.
+- The skill does not modify any screenshots. Annotations (red boxes) are produced by the MCP-driven pipeline (`scripts/annotate-cell-prepare.cjs` → `browser_navigate` + `browser_take_screenshot` → `scripts/annotate-cell-finalize.cjs`) in Step 5.4 (h.3), not here.
 - If you want to add a new visual issue type, add it to both the table above and the sub-agent prompt's "What to look for" list. The orchestrator's mapping is pure passthrough — no code changes needed.
 - The `regionHint` field is the closest thing this skill can provide to a bounding box. The bug filer (Step 7) can use it to render a textual "see top-right of the screenshot" hint in the ADO ticket body.

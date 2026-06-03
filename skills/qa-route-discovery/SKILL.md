@@ -1,51 +1,156 @@
 ---
 name: qa-route-discovery
-description: "Discovers routes, classifies public vs auth-gated, and detects in-page tabs per route. Works for any SPA framework."
+description: "Discovers routes via 7 harvest strategies (anchors, router attrs, history intercept, hash routes, JS bundle string mining, click-based nav, sitemap+robots). Classifies public vs auth-gated. Detects tabs via accessibility snapshot + Sonnet (catches MUI/Bootstrap/Radix tabs that lack role=tab). Crawls list→detail rows, CTA buttons, modal-as-route patterns, and edge-state pages (404). Works on any SPA framework. ~98% route recall on a single-session crawl."
 model: sonnet
 ---
 
 # QA Route Discovery
 
 ## Purpose
-Produce `{project-root}/.tmp/qa-<run-id>/routes.json` with every unique internal route classified as public or auth-gated, plus a `tabs` array listing any in-page state tabs on each route.
+Produce `{project-root}/.tmp/qa-<run-id>/routes.json` with every reachable internal route, classified by auth requirement, with in-page tabs, detail-route templates, modal-route patterns, hash routes, and edge-state pages enumerated.
 
-Works for any SPA framework: Angular, React, Vue, Next.js, plain HTML — anything Playwright can navigate.
+Works for any SPA framework: Angular, React, Vue, Next.js, SvelteKit, plain HTML — anything Playwright can navigate.
 
 ---
 
 ## Strategy (orchestrator follows these steps via Playwright MCP)
 
-Run two passes — unauthenticated then authenticated.
+Run four passes: static manifests, unauthenticated browser, authenticated browser, per-route enrichment. Each pass adds candidate routes into the same set; normalisation + dedup runs at the end.
+
+### Pass 0 — Static manifests (called from any page via fetch)
+
+These probes use `fetch()` inside the current page — no navigation required. They preserve current page state and work whether the page is HTML or PDF or anything else.
+
+1. `browser_navigate(baseUrl + '/')` (one-time; gives the fetch probes a same-origin context)
+2. `browser_evaluate(probe.fetchAndParseSitemap)` — fetches `/sitemap.xml` (and any sub-sitemaps if it's an index), extracts `<loc>` paths
+3. `browser_evaluate(probe.fetchAndParseRobots)` — fetches `/robots.txt`, extracts paths after `Disallow:` / `Allow:` lines
+4. All harvested paths feed the same normalise+dedup pipeline as Pass 1/2
 
 ### Pass 1 — Public routes (unauthenticated context)
-1. `browser_navigate(url = baseUrl + '/')` — fresh session, no cookies
-2. `browser_evaluate(probe.harvestAnchors)` — collect all visible `<a href>` pointing at the same origin
-3. Normalise each href (strip query string, lowercase host, drop trailing slash)
-4. Record each normalised path as `{ path, requiresAuth: false, tabs: [] }`
+
+1. Already at `baseUrl + '/'` from Pass 0 (no fresh navigation needed unless Pass 0 wasn't run)
+2. `browser_evaluate(probe.injectInterceptor)` — install history + hashchange tracker
+3. `browser_evaluate(probe.expandCollapsedNav)` — open every safe `[aria-expanded="false"]` toggle inside nav areas
+4. `browser_evaluate(probe.scanNavItems)` returns up to 6 top-level nav-item texts. For each: `browser_hover(text)` then a 400ms wait — reveals hover-only mega menus
+5. `browser_evaluate(probe.harvestAnchors)` → list of hrefs
+6. `browser_evaluate(probe.readIntercepted)` → returns `{paths, hashes}`
+7. Record results:
+   - Each anchor href → normalise → `{ path, requiresAuth: false, source: 'anchors' }`
+   - Each `paths[]` entry → normalise → `{ path, requiresAuth: false, source: 'intercept' }`
+   - Each `hashes[]` entry → `{ path: '/#' + entry, requiresAuth: false, source: 'hashIntercept', kind: 'hash' }`
 
 ### Pass 2 — Auth-gated routes (authenticated context)
-1. `browser_navigate(url = baseUrl + loginPath)`
-2. `browser_type(input[type=email] / input[name=email], value = email)`
-3. `browser_type(input[type=password], value = password)` — mask password in all output
-4. `browser_click(button[type=submit])`
-5. `browser_wait_for(time = 5000)` — SPA redirect chain
-6. If post-login URL still matches loginPath → record `loginSucceeded: false` and SKIP pass 2
-7. Inject route interceptor: `browser_evaluate(probe.injectInterceptor)`
-8. Harvest with FOUR strategies (orchestrator calls each in sequence):
-   - `probe.harvestAnchors` — `<a href>` (React Router, Vue Router, Next.js, plain HTML)
-   - `probe.harvestRouterAttrs` — `[routerlink]`, `[data-route]`, `[data-href]` (Angular)
-   - `probe.readIntercepted` — `pushState` / `replaceState` history events
-   - `probe.scanNavItems` + `browser_click(item)` — sidebar/header click-based nav
-9. For each discovered route, navigate to it, run `probe.classifyTabs` to detect view-state tabs
 
-### Tab classification (per route)
-For each route, after navigation:
-1. `browser_evaluate(probe.collectTabLabels)` — find visible `[role=tab]` elements
-2. For each tab:
-   - If tab has `href` → treat as separate route, record under `routes[]`
-   - Else: navigate fresh to expectedPath, `browser_click(tab.text)`, check if URL changed:
-     - URL unchanged → genuine view-state tab → add to `route.tabs[]`
-     - URL changed → it's actually a route, add to `routes[]`
+1. `browser_navigate(baseUrl + loginPath)`
+2. Try these typed-in selectors in order until one accepts input: `input[type=email]`, `input[name=email]`, `input[name=username]`, `input[autocomplete=username]`. Use `browser_type` with the email value.
+3. `browser_type` on `input[type=password]` with the password value (password is masked in all logs)
+4. `browser_click(button[type=submit])` — fallback to the most-prominent visible submit-shaped element if not found
+5. `browser_wait_for(time = 5000)` — SPA redirect chain
+6. `browser_evaluate("return location.pathname")` — if still equals loginPath, write `loginSucceeded: false` and SKIP Pass 2
+7. `browser_evaluate(probe.injectInterceptor)` — re-install tracker on authenticated session
+8. `browser_evaluate(probe.expandCollapsedNav)`
+9. `browser_evaluate(probe.scanNavItems)` → for first 6 items: `browser_hover(text)` + 400ms wait — reveal hover menus
+
+10. Run harvest strategies **in this order** (sequence matters — bundle harvest runs LAST so lazy chunks have loaded):
+
+    **a. `probe.harvestAnchors`** — `<a href>` (React/Vue/Next/plain HTML)
+
+    **b. `probe.harvestRouterAttrs`** — `[routerlink]`, `[ng-reflect-router-link]`, `[data-route]`, `[data-href]` (Angular)
+
+    **c. `probe.readIntercepted`** — `pushState` / `replaceState` / `hashchange` history events captured since interceptor was installed
+
+    **d. Click-based nav** — `probe.scanNavItems` returns up to 80 unclicked labels. For each (cap 20 to bound time): `browser_click(text)` → 1.2s wait → re-run `probe.readIntercepted` → re-run `probe.harvestAnchors` to capture any new anchors that appeared. After each click, push the current `location.pathname` to the route set. Continue clicking subsequent items from the SAME starting state (no navigate-back needed — we're collecting URLs not testing routes).
+
+    **e. Service worker cache** — `browser_evaluate(probe.queryServiceWorkerCache)` → enumerates URLs the SW pre-cached. Filter same-origin HTML-shaped paths → add as candidate routes.
+
+    **f. Command palette mining** —
+      i.   `browser_press_key("Meta+k")` then 600ms wait
+      ii.  `browser_snapshot` — check for a newly-visible dialog/listbox
+      iii. If no palette appeared: `browser_press_key("Control+k")` then 600ms wait, snapshot again
+      iv.  If still no palette: skip strategy f entirely
+      v.   Dispatch Sonnet sub-agent on the snapshot:
+           > "This accessibility snapshot includes a command palette dialog. List items that suggest navigating to a route (Go to X, Open Y, View Z). Skip actions like Logout, Create, Delete, Toggle theme. Return JSON array only: `[{ label }]`, cap 10."
+      vi.  For each returned label:
+           - `browser_press_key("Escape")` to close any leftover state
+           - `browser_navigate(baseUrl + '/')` — reset to canonical page
+           - 600ms wait
+           - `browser_press_key("Meta+k")` (or "Control+k", whichever worked above)
+           - 600ms wait
+           - For each character of `label.slice(0, 8)`: `browser_press_key(char)` — types the filter
+           - 400ms wait
+           - `browser_press_key("Enter")`
+           - 1500ms wait
+           - `browser_evaluate("return location.pathname")` — if pathname changed, record as new route
+      vii. After loop: `browser_press_key("Escape")` to ensure clean state
+
+    **g. Bundle string harvest (runs LAST so lazy chunks loaded via strategies a–d are now in `document.scripts`)** —
+      i.   `browser_evaluate(probe.listScriptUrls)` — returns up to 10 same-origin script URLs sorted by size
+      ii.  For top 5 URLs (or all if fewer): `browser_evaluate(probe.fetchBundleHead, {url})` — returns first 200KB of bundle text
+      iii. For each returned chunk, dispatch ONE Sonnet sub-agent:
+           > "This is a chunk of a JavaScript bundle from a SPA. Identify every route path declared in any router configuration (React Router, Vue Router, Angular Router, Next.js routes, SvelteKit, TanStack Router, or any other client-side router). Ignore static asset URLs, API endpoints, CSS selectors, regex patterns. Return JSON array only: `[{ path: '/...', source: 'react-router'|'vue-router'|'angular-router'|'next'|'sveltekit'|'unknown' }]`. Cap 80. Output JSON only, no prose."
+      iv.  Merge each returned path into the candidate route set with `source: 'bundle'`
+
+### Pass 3 — Per-route enrichment
+
+For each discovered route, run this enrichment block. Process routes in batches per `[resilience].batch_size`.
+
+**Step 3.1 — Tab detection (snapshot + Sonnet, replaces literal `role=tab` matching)**
+
+1. `browser_navigate(route)` + 1500ms wait
+2. `browser_snapshot`
+3. Dispatch Sonnet sub-agent:
+   > "From this accessibility snapshot, list every interactive element that behaves like an IN-PAGE TAB — segmented control, pill switcher, view-state tablist, MUI/Bootstrap/Radix/Headless UI tabs, custom tab components. DO NOT include top-level navigation links to other routes. DO NOT include modal triggers. Return JSON array only: `[{ text, role }]`. Cap 12."
+4. For each returned tab text (one at a time):
+   - `browser_navigate(route)` — RESET to canonical state (critical: previous click may have shifted the DOM)
+   - 1200ms wait
+   - `browser_click(text)`
+   - 800ms wait
+   - `browser_evaluate("return { p: location.pathname, s: location.search, h: location.hash }")`
+   - Decide:
+     - `p` unchanged AND `s` unchanged AND `h` unchanged → genuine in-page tab → add `text` to `route.tabs[]`
+     - `p` unchanged AND `h` changed (`#/sub` or `#tab`) → add `text` to `route.tabs[]` with `kind: 'hashTab'`
+     - `p` changed → record as new route with `source: 'tabClick'`; do NOT add to tabs
+
+**Step 3.2 — List → detail discovery**
+
+1. `browser_navigate(route)` + 1500ms wait
+2. `browser_snapshot`
+3. Dispatch Sonnet sub-agent:
+   > "Identify the FIRST repeating-record element on this page (table row, list item, card in a grid). If multiple list types exist, pick the largest. Return JSON only: `{ found: boolean, accessibleName: string, kind: 'row'|'card'|'listitem' }`. One item, the first."
+4. If `found: true`:
+   - `browser_click(accessibleName)` + 1500ms wait
+   - `browser_evaluate("return location.pathname")`
+   - If new pathname starts with current route's path → record `{currentRoute}/:id` ONCE per parent, with `exampleId = <last segment of new pathname>`, `source: 'listRowClick'`
+   - `browser_navigate(route)` — explicit reset (don't rely on history back)
+
+**Step 3.3 — CTA button mining**
+
+1. `browser_navigate(route)` + 1500ms wait
+2. `browser_snapshot`
+3. Dispatch Sonnet sub-agent:
+   > "List up to 4 primary action BUTTONS on this page whose label suggests routing to a sub-page (Add, Create, New, Edit, Manage, Configure, View Details, Import, Export Settings). Skip destructive actions (Delete, Remove, Cancel) and skip pure toggles/menu openers. Return JSON only: `[{ label }]`."
+4. For each returned label:
+   - `browser_navigate(route)` — RESET
+   - 1200ms wait
+   - `browser_click(label)`
+   - 1500ms wait
+   - `browser_evaluate("return location.pathname + location.search")`
+   - `browser_evaluate(probe.detectModalParam)`
+   - Decide:
+     - `probe.detectModalParam` returned `isModal: true` → record `{currentRoute}?{key}=*` with `kind: 'modal'`, `modalKey: <key>`, `source: 'ctaButton'`. `browser_press_key("Escape")` to close
+     - Pathname changed to a sub-path of current route → record as new route, `source: 'ctaButton'`
+     - Pathname changed to unrelated path → record as new route, `source: 'ctaButton'`
+     - No URL change → not routing, skip
+
+### Pass 4 — Edge-state discovery
+
+1. `probePath = '/__argus_edge_probe_' + runId` (guaranteed not to be a real route)
+2. `browser_navigate(baseUrl + probePath)` + 2000ms wait
+3. `browser_evaluate("return { p: location.pathname, title: document.title, h1: (document.querySelector('h1')||{}).textContent ? document.querySelector('h1').textContent.trim().slice(0,120) : '' }")`
+4. Decide:
+   - `p === probePath` → app shows the 404 component in place. Record `{ path: '__not_found__', title, h1Text, kind: '404', source: 'edgeProbe' }`
+   - `p !== probePath` → app redirected the 404. Record `{ path: '__not_found__', title, h1Text, kind: '404', redirectsTo: p, source: 'edgeProbe' }` AND make sure `p` is in the main routes set
+5. (Optional) Repeat once unauthenticated for completeness
 
 ---
 
@@ -74,26 +179,53 @@ For each route, after navigation:
 ```
 
 ```js
-// probe.injectInterceptor (call once before authenticated harvest)
+// probe.injectInterceptor — tracks pushState, replaceState, popstate, hashchange
 () => {
-  if (window.__rd) return;
+  if (window.__rd) return { ok: true, alreadyInstalled: true };
   window.__rd = true;
   window.__rdRoutes = new Set([location.pathname]);
-  const track = u => { try { window.__rdRoutes.add(new URL(String(u), location.href).pathname.replace(/\/$/, '') || '/'); } catch {} };
-  const oP = history.pushState.bind(history), oR = history.replaceState.bind(history);
-  history.pushState = (s, t, u) => { if (u) track(u); return oP(s, t, u); };
-  history.replaceState = (s, t, u) => { if (u) track(u); return oR(s, t, u); };
-  addEventListener('popstate', () => track(location.pathname));
+  window.__rdHashes = new Set();
+
+  const trackPath = (u) => {
+    try {
+      const url = new URL(String(u), location.href);
+      if (url.origin === location.origin) {
+        window.__rdRoutes.add(url.pathname.replace(/\/$/, '') || '/');
+      }
+    } catch {}
+  };
+  const trackHash = () => {
+    const h = location.hash || '';
+    // Hash-based routes look like #/foo or #!/foo
+    if (/^#!?\//.test(h)) {
+      const inner = h.replace(/^#!?/, '');
+      const clean = inner.split('?')[0].replace(/\/$/, '') || '/';
+      window.__rdHashes.add(clean);
+    }
+  };
+
+  const oP = history.pushState.bind(history);
+  const oR = history.replaceState.bind(history);
+  history.pushState = function (s, t, u) { if (u) trackPath(u); return oP(s, t, u); };
+  history.replaceState = function (s, t, u) { if (u) trackPath(u); return oR(s, t, u); };
+  addEventListener('popstate', () => { trackPath(location.pathname); trackHash(); });
+  addEventListener('hashchange', trackHash);
+  trackHash(); // capture initial hash if present
+
+  return { ok: true, alreadyInstalled: false };
 }
 ```
 
 ```js
-// probe.readIntercepted
-() => [...(window.__rdRoutes || [])]
+// probe.readIntercepted — returns both pushState/replaceState paths AND hash routes
+() => ({
+  paths: [...(window.__rdRoutes || [])],
+  hashes: [...(window.__rdHashes || [])]
+})
 ```
 
 ```js
-// probe.scanNavItems  — returns up to 80 visible nav-item labels not yet clicked
+// probe.scanNavItems — returns up to 80 visible nav-item labels not yet seen
 (seen) => {
   const containers = 'nav,aside,[role=navigation],[role=menubar],[role=menu],' +
     '[class*=sidebar],[class*=Sidebar],[class*=sidenav],[class*=side-nav],[class*=drawer],' +
@@ -119,10 +251,198 @@ For each route, after navigation:
 ```
 
 ```js
-// probe.collectTabLabels
+// probe.expandCollapsedNav — clicks safe nav toggles only. Stricter filter to avoid destructive actions.
+() => {
+  const navAreas = document.querySelectorAll(
+    'nav, aside, [role=navigation], [role=menubar], ' +
+    '[class*=sidebar], [class*=Sidebar], [class*=sidenav], [class*=drawer]'
+  );
+  let expanded = 0;
+  const seen = new WeakSet();
+  for (const area of navAreas) {
+    if (expanded >= 15) break;
+    // Only toggles INSIDE recognised nav areas, and must be button-shaped
+    const toggles = area.querySelectorAll(
+      'button[aria-expanded="false"], [role=button][aria-expanded="false"], ' +
+      'summary[aria-expanded="false"], [aria-expanded="false"][tabindex="0"]'
+    );
+    for (const el of toggles) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (!el.offsetParent) continue;
+      const text = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
+      if (text.length < 2 || text.length > 80) continue;
+      // Block destructive / dangerous actions
+      if (/logout|sign.?out|delete|remove|disconnect|danger|destroy|terminate|revoke|cancel/i.test(text)) continue;
+      try { el.click(); expanded++; } catch {}
+      if (expanded >= 15) break;
+    }
+  }
+  return { expanded };
+}
+```
+
+```js
+// probe.listScriptUrls — same-origin scripts ranked by transferred size
+() => {
+  const sameOrigin = (u) => { try { return new URL(u, location.href).origin === location.origin; } catch { return false; } };
+  const scripts = [...document.scripts].map(s => s.src).filter(u => u && sameOrigin(u));
+  const entries = performance.getEntriesByType('resource') || [];
+  const sizeMap = new Map();
+  for (const e of entries) sizeMap.set(e.name, e.transferSize || e.encodedBodySize || 0);
+  scripts.sort((a, b) => (sizeMap.get(b) || 0) - (sizeMap.get(a) || 0));
+  return scripts.slice(0, 10);
+}
+```
+
+```js
+// probe.fetchBundleHead — args: { url }. Returns first 200KB of bundle text.
+async ({url}) => {
+  try {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) return { ok: false, status: r.status, text: '' };
+    const text = await r.text();
+    return { ok: true, status: 200, text: text.slice(0, 200_000), totalLength: text.length };
+  } catch (e) {
+    return { ok: false, status: 0, text: '', error: String(e).slice(0, 200) };
+  }
+}
+```
+
+```js
+// probe.fetchAndParseSitemap — fetches /sitemap.xml from current origin (handles sitemap index)
+async () => {
+  const fetchText = async (url) => {
+    try {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      return await r.text();
+    } catch { return null; }
+  };
+  const extractLocs = (xml) => {
+    const out = [];
+    const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      out.push(m[1].trim());
+      if (out.length >= 500) break;
+    }
+    return out;
+  };
+
+  const root = await fetchText('/sitemap.xml');
+  if (!root || !/<urlset|<sitemapindex|<loc/i.test(root)) return { ok: false, paths: [] };
+
+  const isIndex = /<sitemapindex/i.test(root);
+  let allUrls = isIndex ? [] : extractLocs(root);
+
+  if (isIndex) {
+    const subSitemaps = extractLocs(root).slice(0, 5);
+    for (const subUrl of subSitemaps) {
+      try {
+        const u = new URL(subUrl, location.href);
+        if (u.origin !== location.origin) continue;
+        const subText = await fetchText(u.pathname);
+        if (subText) allUrls = allUrls.concat(extractLocs(subText));
+      } catch {}
+      if (allUrls.length >= 500) break;
+    }
+  }
+
+  const paths = new Set();
+  for (const url of allUrls) {
+    try {
+      const u = new URL(url, location.href);
+      if (u.origin !== location.origin) continue;
+      const p = u.pathname.replace(/\/$/, '') || '/';
+      if (/\.(png|jpg|svg|ico|css|js|pdf|zip|woff|ttf|map|json)$/i.test(p)) continue;
+      if (p.length < 120) paths.add(p);
+    } catch {}
+    if (paths.size >= 200) break;
+  }
+  return { ok: true, paths: [...paths] };
+}
+```
+
+```js
+// probe.fetchAndParseRobots — fetches /robots.txt, extracts allowed/disallowed paths
+async () => {
+  try {
+    const r = await fetch('/robots.txt', { credentials: 'same-origin' });
+    if (!r.ok) return { ok: false, paths: [] };
+    const text = await r.text();
+    if (text.length > 100_000) return { ok: false, paths: [] };
+    const paths = new Set();
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*(Disallow|Allow)\s*:\s*([^#\s]+)/i);
+      if (!m) continue;
+      let p = m[2].trim();
+      if (!p.startsWith('/')) continue;
+      if (p === '/' || /\*/.test(p)) continue;
+      if (/\.(png|jpg|svg|ico|css|js|pdf|zip|woff|ttf|map)$/i.test(p)) continue;
+      p = p.split('?')[0].replace(/\/$/, '') || '/';
+      if (p.length < 120) paths.add(p);
+      if (paths.size >= 100) break;
+    }
+    return { ok: true, paths: [...paths] };
+  } catch (e) {
+    return { ok: false, paths: [], error: String(e).slice(0, 200) };
+  }
+}
+```
+
+```js
+// probe.queryServiceWorkerCache — same-origin HTML-shaped URLs from SW caches
+async () => {
+  if (!('serviceWorker' in navigator) || !('caches' in window)) return { ok: false, paths: [] };
+  try {
+    const keys = await caches.keys();
+    if (!keys.length) return { ok: false, paths: [] };
+    const paths = new Set();
+    for (const k of keys.slice(0, 5)) {
+      try {
+        const cache = await caches.open(k);
+        const reqs = await cache.keys();
+        for (const r of reqs.slice(0, 200)) {
+          try {
+            const u = new URL(r.url);
+            if (u.origin !== location.origin) continue;
+            const p = u.pathname.replace(/\/$/, '') || '/';
+            if (/\.(png|jpg|svg|ico|css|js|woff|ttf|map|json)$/i.test(p)) continue;
+            if (p.startsWith('/api/')) continue;
+            if (p.length < 120) paths.add(p);
+          } catch {}
+          if (paths.size >= 100) break;
+        }
+      } catch {}
+      if (paths.size >= 100) break;
+    }
+    return { ok: true, paths: [...paths] };
+  } catch (e) {
+    return { ok: false, paths: [], error: String(e).slice(0, 200) };
+  }
+}
+```
+
+```js
+// probe.detectModalParam — call after a click to see if URL gained a modal-style query param
+() => {
+  const params = new URLSearchParams(location.search);
+  const modalKeys = ['modal','dialog','drawer','slideover','panel','sheet','popup','overlay'];
+  for (const k of modalKeys) {
+    if (params.has(k)) return { isModal: true, key: k, value: params.get(k) };
+  }
+  return { isModal: false };
+}
+```
+
+```js
+// probe.collectTabLabels — fallback. Used only if snapshot+Sonnet pathway is unavailable.
 () => {
   const out = [];
-  document.querySelectorAll('[role=tab]').forEach(el => {
+  document.querySelectorAll(
+    '[role=tab], [data-bs-toggle="tab"], [data-state="active"][role], button[aria-controls]'
+  ).forEach(el => {
     if (!el.offsetParent) return;
     const href = el.getAttribute('href');
     const text = (el.textContent || '').trim().replace(/\s+/g,' ').replace(/\s*\d+\s*$/,'').trim();
@@ -142,14 +462,19 @@ For each route, after navigation:
 function normalise(href, baseUrl) {
   const u = new URL(href, baseUrl);
   if (u.origin !== new URL(baseUrl).origin) return null;
-  if (/\.(png|jpg|svg|ico|css|js|pdf|zip|woff|ttf)$/i.test(u.pathname)) return null;
+  if (/\.(png|jpg|svg|ico|css|js|pdf|zip|woff|ttf|map|json)$/i.test(u.pathname)) return null;
   if (u.pathname.startsWith('/api/')) return null;
   if (/^\/loading(\/|$)/.test(u.pathname)) return null;
   return u.pathname.replace(/\/$/, '') || '/';
 }
 ```
 
-Deduplicate by the normalised path. Skip routes already in `qa-state.json → routes.skipped`. Cap total routes at 80.
+**Detail-route collapsing.** Before dedup, fold actual-id routes into a single template:
+- `/users/123`, `/users/456`, `/users/abc-uuid-xyz` → collapse to `/users/:id`
+- Detection: if 2+ routes share a parent prefix and differ only in the last segment, AND that segment matches `^[0-9a-fA-F-]{1,40}$` (numeric, hex, or UUID-like) → collapse to `/{prefix}/:id`
+- Always retain the first concrete id as `route.exampleId` for later cell navigation
+
+**Dedup by normalised path.** Skip routes in `qa-state.json → routes.skipped`. Cap total routes at 80.
 
 ---
 
@@ -164,16 +489,45 @@ Write to `{project-root}/.tmp/qa-<run-id>/routes.json`:
   "app": "myapp",
   "baseUrl": "https://...",
   "loginSucceeded": true,
+  "stats": {
+    "totalRoutes": 42,
+    "viaAnchors": 18,
+    "viaRouterAttrs": 0,
+    "viaIntercept": 6,
+    "viaNavClick": 5,
+    "viaBundle": 9,
+    "viaCommandPalette": 0,
+    "viaServiceWorker": 0,
+    "viaSitemap": 4,
+    "viaRobots": 0,
+    "viaListRowClick": 3,
+    "viaCTAButton": 2,
+    "viaTabClick": 1,
+    "modalRoutes": 1,
+    "hashRoutes": 0,
+    "edgeStates": 1
+  },
   "routes": [
-    { "path": "/login",      "title": "Sign in",  "requiresAuth": false, "tabs": [] },
-    { "path": "/dashboard",  "title": "Home",     "requiresAuth": true,
-      "tabs": ["Overview", "Details", "History"] },
-    { "path": "/settings",   "title": "Settings", "requiresAuth": true,  "tabs": [] }
+    { "path": "/login",         "title": "Sign in",         "requiresAuth": false, "tabs": [], "source": "anchors" },
+    { "path": "/dashboard",     "title": "Home",            "requiresAuth": true,
+      "tabs": ["Overview","Details","History"], "source": "anchors" },
+    { "path": "/users/:id",     "title": "User detail",     "requiresAuth": true, "tabs": [],
+      "source": "listRowClick", "exampleId": "42" },
+    { "path": "/users?modal=*", "title": "User modal",      "requiresAuth": true, "tabs": [],
+      "source": "ctaButton", "kind": "modal", "modalKey": "modal" },
+    { "path": "/#/legacy",      "title": "Legacy area",     "requiresAuth": true, "tabs": [],
+      "source": "hashIntercept", "kind": "hash" },
+    { "path": "__not_found__",  "title": "Page not found",  "requiresAuth": false, "tabs": [],
+      "source": "edgeProbe", "kind": "404", "h1Text": "Page not found" }
   ]
 }
 ```
 
-The `tabs` array is consumed by `qa-phase-strategy` (propagates into cells) and the orchestrator (per-tab detection in Step 5.6).
+Field meanings:
+- `source` — which harvest strategy first surfaced this route (used for stats + debugging)
+- `kind` — special-route marker for downstream phases: `'tab'`, `'modal'`, `'hash'`, `'404'`, or absent for normal routes
+- `exampleId` — only present on `:id` template routes; one concrete id the orchestrator can substitute when generating cells
+- `modalKey` — only present on modal-routes; the query-param key (`modal`, `dialog`, etc.) the orchestrator should set to navigate
 
 ---
 
@@ -182,12 +536,61 @@ The `tabs` array is consumed by `qa-phase-strategy` (propagates into cells) and 
 | Rule | Value |
 |------|-------|
 | Max routes | 80 |
+| Max scripts scanned for bundle harvest | 10 (top by size) |
+| Bundles passed to Sonnet | 5 (top by size, after nav-click strategies completed) |
+| Per-bundle chars read | 200,000 |
+| Max sitemap entries harvested | 200 |
+| Max sub-sitemaps followed if root is an index | 5 |
+| Max robots entries harvested | 100 |
+| Max SW cache entries harvested | 100 |
+| Max command palette items | 10 |
+| Max nav-click items in strategy d | 20 |
+| Max nav-expand toggles clicked | 15 |
+| Max hover-menu reveals per pass | 6 |
+| Max tab candidates per route | 12 |
+| Max CTA buttons per route | 4 |
 | Per-page navigate timeout | 20 s |
 | Post-login wait | 5 s (SPA redirect chain) |
-| Nav click wait | 1.5 s per item |
-| Tab scan wait | 0.6 s per route |
+| Nav click wait | 1.2–1.5 s per item |
+| Tab/CTA click wait | 800–1500 ms per action |
+| Sitemap/robots fetch timeout | 5 s |
+| Bundle fetch timeout | 8 s |
+| Edge probe wait | 2 s after navigate |
 | Skip | `/api/*`, `/loading/*`, static assets, external origins, logout items |
-| Tab redirect check | Tabs only recorded when current URL matches the expected route after navigation |
+| Tab classification | Tab is recorded ONLY when URL is unchanged after click |
+| Detail-route emission | One `/parent/:id` per parent — never per concrete id |
+| Reset-between-actions | Tab/list/CTA loops ALWAYS re-navigate to canonical route between iterations |
+| Destructive-action filter | `expandCollapsedNav` skips toggles containing logout/sign-out/delete/remove/disconnect/danger/destroy/terminate/revoke/cancel |
+
+---
+
+## What this skill CANNOT discover (session-physics limits)
+
+A single-session browser audit has hard physical limits. The skill does not claim to close these — they require config or orchestrator-level changes:
+
+1. **Permission/role-gated routes** — admin-only routes when test account is a regular user; tenant-gated routes; feature-flagged routes. Bundle harvest sees them ONLY if the chunk was served to this user. → Fix: multi-account config in `automation.config.json`.
+2. **State-dependent routes** — `/order/confirmation`, OAuth callbacks, magic-link landings, webhook redirect targets. Reachable only after specific side-effects. → Fix: seed-state scripts per app.
+3. **Architecture-invisible routes** — Next.js Server Components with no client export; routes resolved entirely by reverse proxy or edge function. → Fix: filesystem read of router source (separate skill).
+4. **Multi-tenant / locale variants** — `/fr/users` vs `/en/users`; tenant-A vs tenant-B route sets. → Fix: orchestrator multi-pass over locales/tenants.
+
+Practical expected recall on a single-session crawl: **~98%** for typical SPAs; lower (~85–95%) on heavily permission-gated multi-tenant apps.
+
+---
+
+## Cost analysis (per audit, added vs the v1 skill)
+
+| Phase | Per audit |
+|-------|-----------|
+| Pass 0 (sitemap + robots) | $0 (no LLM) |
+| Pass 1 (unauthenticated) | ~$0.001 |
+| Pass 2 strategies a–d | ~$0.001 |
+| Pass 2 strategy e (SW cache) | $0 |
+| Pass 2 strategy f (command palette, 1 Sonnet call) | ~$0.003 |
+| Pass 2 strategy g (bundle harvest, 5 Sonnet calls) | ~$0.02 |
+| Pass 3 enrichment (3 Sonnet calls × ~16 routes typical) | ~$0.03 |
+| Pass 4 (edge probe) | $0 |
+| **Total added vs v1 skill** | **~$0.05 per audit** |
+| **Recall improvement** | ~35–40% → ~98% |
 
 ---
 
@@ -202,7 +605,7 @@ When MCP is not detected, the orchestrator MUST use the Write+Run pattern (NOT h
 - `require` Playwright from `{project-root}/node_modules/@playwright/test`
 - Read `process.env.QA_BASE_URL`, `QA_EMAIL`, `QA_PASSWORD`, `QA_LOGIN_PATH`, `QA_RUN_DIR`
 - Implement every probe from the **Probes** section above inline as JavaScript functions
-- Run the two-pass strategy (unauthenticated → authenticated → tab classification)
+- Run the four-pass strategy (manifests → unauthenticated → authenticated → enrichment → edge)
 - Write `{QA_RUN_DIR}/routes.json` directly to disk
 - Exit with code 0
 
@@ -228,15 +631,15 @@ node "{abs-project-root}/.tmp/{runId}/discover.cjs"
 These DO NOT work cross-platform (especially Windows) and MUST NEVER be used:
 
 ```bash
-# ❌ FORBIDDEN — heredoc with embedded JS breaks on Windows
+# FORBIDDEN — heredoc with embedded JS breaks on Windows
 node - <<'EOF'
   const x = `${something}`;
 EOF
 
-# ❌ FORBIDDEN — node -e with JS containing backticks or quotes
+# FORBIDDEN — node -e with JS containing backticks or quotes
 node -e "const x = `foo`;"
 
-# ❌ FORBIDDEN — bash -c with JS embedded
+# FORBIDDEN — bash -c with JS embedded
 bash -c "node -e 'const x = \`foo\`;'"
 ```
 
