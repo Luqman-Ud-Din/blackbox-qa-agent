@@ -644,6 +644,35 @@ LOG: "�xa� Step 5: Running skill checks"
 
 No permanent runner. The orchestrator drives the browser via Playwright MCP tools (or inline Bash + Playwright fallback) and dispatches each cell's work on the model the skill declares.
 
+#### 5.0.A — Build the coverage ledger (MANDATORY checklist — do this BEFORE the per-cell loop)
+
+🚨 This step is what makes silent skips impossible. The audit's deliverable is NOT "some findings" — it is a COMPLETE LEDGER proving every applicable (cell × skill) pair was accounted for. The run may not finish until the ledger is complete (enforced in Step 5.9).
+
+1. Read `{project-root}/.tmp/{runId}/audit-plan.json` → the full cell list (every route × viewport × browser). Assign each cell a STABLE id `cell-NNN` in plan order (001, 002, …). These ids are fixed for the whole run and are what `--resume` keys on.
+
+2. For each cell compute its APPLICABLE skill set with NO model judgment — pure set operation:
+   ```
+   applicableSkills(cell) = ALL_ENABLED_SKILLS.filter(s =>
+        (s.applyOn === 'all' || s.applyOn.includes(cell.viewportClass))
+        && (s.viewportSensitive === true || isViewportLeaderFor(s, cell)))
+   ```
+   - `ALL_ENABLED_SKILLS` = every key set `true` in `customize.toml [detectors]`, PLUS the enabled functional / content / vision skills.
+   - `s.applyOn` and `s.viewportSensitive` come from each skill's SKILL.md frontmatter (e.g. `qa-detect-touch` → `applyOn:[mobile,tablet]` so it is NOT applicable on desktop cells; `qa-detect-web-vitals` → `viewportSensitive:false` so it applies only on the viewport-leader cell for that route).
+   - You may NOT drop a skill because "the page probably has no forms" — the skill's own probe self-skips and records `skipped` (Step 5.4 j.1). Dropping a skill here is forbidden.
+
+3. Write the ledger to `{project-root}/.tmp/{runId}/coverage-ledger.jsonl` (a plain data file, written via the Write tool — NOT a script, and NEVER written into `issues/*.jsonl`). ONE line per expected (cell × skill) pair, status `expected`:
+   ```
+   {"cellId":"cell-007","route":"/billing","viewport":"Mobile","viewportClass":"mobile","browser":"chromium","skill":"qa-detect-overflow","status":"expected","reason":""}
+   ```
+
+4. Log:
+   ```
+   📋 Coverage ledger built: {pairs} expected (cell × skill) pairs across {cells} cells
+      ({mobileCells} mobile, {tabletCells} tablet, {desktopCells} desktop) × {browsers}
+   ```
+
+Every `expected` line MUST become `done` / `clean` / `skipped` / `error` (Step 5.4 j.1) before the audit may finish. Any line left `expected` is a silent skip — Step 5.9's finish-gate will catch it and re-run or surface it.
+
 #### 5.1 � Determine enabled skills + model routing
 
 Read `customize.toml`:
@@ -932,10 +961,11 @@ For each cell (route � viewport � browser):
        (1) Take the cell's base screenshot via MCP — exactly ONE per cell. **MUST use `fullPage: true`** so the entire document is captured. Probes return bboxes in document coordinates; viewport-only screenshots cause every bbox below the fold to be drawn outside the image (the historical "annotation in the wrong place" bug from run-006 cell-007):
            ```
            browser_take_screenshot(
-             path     = "{project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png",
+             filename = "<ABSOLUTE-project-root>/.tmp/{runId}/screenshots/{cell.id}-base.png",
              fullPage = true
            )
            ```
+           🚨 **MUST pass the FULL ABSOLUTE path** ending in `/.tmp/{runId}/screenshots/{cell.id}-base.png` (resolve `{project-root}` to its absolute form first). A plain name like `billing-desktop.png` makes Playwright MCP save into its OWN default `.playwright-mcp/` directory, where `annotate-cell-prepare.cjs` will NOT find it — it reads exactly `{project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png` and exits "base missing", producing ZERO annotated screenshots. This was the confirmed root cause of the run-audit1 "no annotations on tickets" bug. Step 5.9 also flags any cell missing this exact file.
 
        (2) For every finding emitted by a skill in this cell, before writing
            it to JSONL ensure the finding has a `bbox` resolved:
@@ -1115,6 +1145,14 @@ For each cell (route � viewport � browser):
 
        **AFTER dedup completes, proceed to the append below with the deduped finding set.**
 
+       **(j.1) COVERAGE MARKS — MANDATORY, before moving to the next cell.** For EVERY skill in this cell's `applicableSkills` (from the Step 5.0.A ledger), update that skill's ledger line in `{project-root}/.tmp/{runId}/coverage-ledger.jsonl`, changing `status` from `expected` to exactly one of:
+       - `done`    — the skill ran and emitted ≥1 finding (the finding is also in `issues/{cell.id}.jsonl`)
+       - `clean`   — the skill ran and found nothing
+       - `skipped` — preconditions absent (e.g. no forms on the page); set `reason` to a one-line cause
+       - `error`   — probe threw / cell timed out; set `reason`
+
+       Rules: (1) NO skill in `applicableSkills` may be left `expected` — a skill that produced none of the four states is a silent skip and is forbidden. (2) These marks go ONLY in `coverage-ledger.jsonl`, NEVER in `issues/*.jsonl` (so `file-bugs.cjs` / `argus-schema.cjs` never see them and stay untouched). (3) Pin the set: run EVERY skill in `applicableSkills`, never a model-chosen subset.
+
        Append findings to {project-root}/.tmp/{runId}/issues/{cell.id}.jsonl
        � one JSON object per line, schema:
        {runId, cellId, skill, issueType, severity, route, viewport,
@@ -1203,7 +1241,11 @@ After all cells, write `{project-root}/.tmp/{runId}/run-summary.json`:
   "mode": "mcp|bash",
   "screenshotsCaptured": N,
   "screenshotsSkipped": N,
-  "degradedCells": ["cell-003", "cell-007"]
+  "degradedCells": ["cell-003", "cell-007"],
+  "expectedPairs": N,
+  "accountedPairs": N,
+  "coveragePct": N,
+  "degradedPairs": [{"cellId": "cell-012", "skill": "qa-detect-touch", "reason": "mobile 504 — no DOM"}]
 }
 ```
 
@@ -1229,6 +1271,30 @@ Log:
 ```
 
 All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
+
+#### 5.9 — Coverage finish-gate (MANDATORY — the run may NOT complete until this passes)
+
+🚨 This is the gate that makes "nothing silently skipped" real. Run it after Step 5.8 and BEFORE Step 6. It cannot be skipped by reasoning — "I think coverage is fine" is not allowed; the ledger is the proof.
+
+1. Read `{project-root}/.tmp/{runId}/coverage-ledger.jsonl`.
+2. Find every line still `status:"expected"` → these are SILENT SKIPS: a (cell × skill) pair that was planned but never ran (this is exactly what dropped tablet + ~48 skills in run-audit1).
+3. For every cell that has any non-`expected` line, confirm `{project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png` exists. A missing base PNG = that cell needs a re-run (its screenshot landed in the wrong place — see Step 5.4h).
+4. If any `expected` lines OR missing base screenshots remain:
+   - **retries so far < `customize.toml [resilience] coverage_max_retries` (default 2)?**
+     → re-dispatch ONLY the missing (cell × skill) pairs and missing-screenshot cells through the Step 5.4 loop (scoped to those, same as `--resume`), then GO BACK to sub-step 1.
+   - **retries exhausted?**
+     → set each still-unfinished line to `status:"degraded"` with a concrete `reason` (e.g. `"mobile route 504 — no DOM"`, `"skill did not run after 2 retries"`). It is now SURFACED in the report, never silently dropped.
+5. Log the gate result:
+   ```
+   🔍 Coverage finish-gate
+      Expected pairs : {expected}
+      Accounted      : {done+clean+skipped+error}  ({coveragePct}%)
+      Re-running     : {rerunCount}
+      Degraded       : {degradedCount}  → {cellId:skill — reason, ...}
+   ```
+6. The audit may proceed to Step 6/7 ONLY when EVERY ledger line is in a terminal state (`done` | `clean` | `skipped` | `error` | `degraded`) and NO `expected`/blank lines remain. If `expected` lines still remain after the retry cap (should not happen — they should become `degraded`), the run is INCOMPLETE: say so loudly and do NOT report success.
+
+The final coverage report (Step 8) MUST list every `degraded` pair with its reason, and MUST state the real coverage (`accounted/expected`) — never present a partial run as complete (the run-audit1 report claimed "done" at ~1/60 cells; that is now forbidden).
 
 ---
 

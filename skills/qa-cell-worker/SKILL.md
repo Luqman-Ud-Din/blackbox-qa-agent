@@ -59,11 +59,10 @@ For each `cell` in `cells[]`:
 2. Run the SAME per-cell execution that `qa-argus` Step 5.4 documents:
    - `browser_navigate({ url: baseUrl + cell.route, waitUntil: "domcontentloaded", timeout: 15000 })`
    - `browser_wait_for({ time: resilience.post_navigate_settle_ms })`
-   - Batched Haiku probes for all enabled mechanical skills (single `browser_evaluate`)
-   - Sonnet skills dispatched one by one (via Agent tool — yes, workers can spawn THEIR OWN sub-subagents for Sonnet skills)
-   - Interactive skills run their MCP-tool sequences
-   - `browser_take_screenshot({ path: ".tmp/{runId}/screenshots/{cell.id}-base.png", fullPage: true })`
-   - Write findings to `.tmp/{runId}/issues/{cell.id}.jsonl` (streaming append)
+   - Run EVERY skill in this cell's `applicableSkills` (from the Step 5.0.A coverage ledger) — never a model-chosen subset. Batched Haiku probes in a single `browser_evaluate`; Sonnet skills dispatched one by one (workers can spawn their own sub-subagents); interactive skills run their MCP-tool sequences.
+   - `browser_take_screenshot({ filename: "<ABSOLUTE-project-root>/.tmp/{runId}/screenshots/{cell.id}-base.png", fullPage: true })` — MUST be the full absolute path, NOT a plain name (a plain name lands in `.playwright-mcp/` and breaks annotation; see qa-argus Step 5.4h).
+   - Write findings to `.tmp/{runId}/issues/{cell.id}.jsonl` (streaming append).
+   - **Coverage marks (MANDATORY):** for every skill in `applicableSkills`, update its line in `.tmp/{runId}/coverage-ledger.jsonl` to `done`/`clean`/`skipped(reason)`/`error(reason)` — qa-argus Step 5.4 j.1. No applicable skill may be left `expected`. These marks go ONLY in the ledger, never in `issues/*.jsonl`.
    - Annotation pipeline: `annotate-cell-prepare.cjs` → `browser_navigate` + `browser_take_screenshot` → `annotate-cell-finalize.cjs`
    - Cross-skill dedup (in-orchestrator, no MCP call)
 

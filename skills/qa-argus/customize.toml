@@ -165,3 +165,4 @@ batch_size              = 12      # chunk audit into N-cell Sonnet dispatches (p
 network_capture_cap     = 100     # browser_network_requests() result truncated to this many entries
 stream_writes           = true    # write findings JSONL per-skill, not per-cell (prevents data loss on hang)
 preflight_url_health    = true    # HEAD baseUrl with 5s timeout before audit starts
+coverage_max_retries    = 2       # Step 5.9 finish-gate: re-run missing (cell × skill) pairs up to N times before marking them degraded
