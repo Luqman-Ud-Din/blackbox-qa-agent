@@ -26,7 +26,7 @@ Single skill owning every widget-specific bug type. By construction, no two skil
 
 ---
 
-## What it checks (UNION of 32 issue types from 9 source skills)
+## What it checks (UNION of 35 issue types from 9 source skills + 3 gap-fixes 2026-06-03)
 
 ### Date / time
 | issueType | severity | catches |
@@ -34,6 +34,7 @@ Single skill owning every widget-specific bug type. By construction, no two skil
 | `dateInputNoMinMax` | low | Date input missing min/max attrs in future-only context |
 | `dateAllowsPastForFutureField` | medium | Future-only field (expir/due/appointment) accepted 2020-01-01 |
 | `dateRangeEndBeforeStart` | high | Date range pair accepted end < start |
+| `datePickerKeyboardTrap` | medium | Date picker calendar opens but Tab / Arrow keys do not navigate cells (a11y/keyboard-user barrier) |
 
 ### File upload
 | issueType | severity | catches |
@@ -41,6 +42,8 @@ Single skill owning every widget-specific bug type. By construction, no two skil
 | `fileAcceptMissing` | medium | No `accept=` attribute — any file type accepted |
 | `fileSizeHintMissing` | low | No visible "max N MB" hint near file input |
 | `fileNoSelectionFeedback` | medium | After upload, no UI shows the file name |
+| `uploadNoProgressUI` | medium | File input has no nearby `<progress>` / `[role=progressbar]` / `.progress` element — large uploads appear frozen |
+| `uploadNoCancelButton` | low | Upload UI has no cancel/abort control near the file input — users stuck waiting on bad uploads |
 
 ### OTP / verification
 | issueType | severity | catches |
@@ -120,6 +123,50 @@ Run `probe.discoverAllWidgets`. Returns:
 
 If every value is empty/false → self-skip with no findings.
 
+### Step 1.5 — Passive scans (NEW, added 2026-06-03)
+
+Before running interactive per-widget tests, do one passive sweep for the two patterns that need no interaction:
+
+```js
+// probe.passiveInputScans — single round-trip
+() => {
+  const sel = el => (el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')).slice(0, 120);
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const out = [];
+
+  // gap 7 — file upload progress + cancel UI
+  for (const f of document.querySelectorAll('input[type="file"]')) {
+    const r = f.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    const container = f.closest('form, .upload, .file-upload, .drop-zone, .dropzone, .form-group, fieldset') || f.parentElement;
+    if (!container) continue;
+    const hasProgress = !!container.querySelector(
+      'progress, [role="progressbar"], .progress, .progress-bar, [class*="upload-progress"], [class*="upload-bar"], [data-testid*="progress"]'
+    );
+    const hasCancel = !!container.querySelector(
+      'button[class*="cancel" i], button[class*="abort" i], [aria-label*="cancel" i], [data-testid*="cancel"], .cancel-upload'
+    );
+    if (!hasProgress) {
+      out.push({
+        issueType: 'uploadNoProgressUI', severity: 'medium', selector: sel(f),
+        description: 'File input has no <progress> or [role=progressbar] element in its container. Users uploading large files see no feedback and may think the page is frozen.',
+        bbox: bb(f)
+      });
+    }
+    if (!hasCancel) {
+      out.push({
+        issueType: 'uploadNoCancelButton', severity: 'low', selector: sel(f),
+        description: 'File input has no cancel/abort button near it. Users who selected the wrong file or have a stuck upload have no way out.',
+        bbox: bb(f)
+      });
+    }
+  }
+  return out;
+}
+```
+
+Append all findings from this probe to the cell's JSONL. Then proceed to Step 2-10 below.
+
 ### Step 2-10 — Per-widget test suites
 
 For each widget type with detected instances, run its dedicated test sequence. Tests are independent of each other; a crash in one widget type does NOT abort the others.
@@ -180,6 +227,54 @@ For each widget type with detected instances, run its dedicated test sequence. T
 - Type "123" in primary, check strength indicator → `passwordNoStrengthFeedback`
 - If confirm exists: mismatch test → `confirmPasswordNoMismatchError`
 - Cleanup via `probe.clearPasswordFields`
+
+
+#### Date picker keyboard navigation (gap 10, added 2026-06-03)
+
+Run AFTER the existing date min/max checks. Only when an INPUT[type="date"] OR a custom date-picker widget is detected on the page.
+
+**Test recipe:**
+
+1. Identify the date input:
+   - `input[type="date"]` (native), OR
+   - `[role="combobox"][aria-haspopup="dialog"]` near a calendar icon, OR
+   - `.datepicker, .react-datepicker, .mat-datepicker, [class*="DatePicker"]` (popular libraries)
+
+2. Focus the input via `browser_evaluate(() => { document.querySelector(SEL).focus(); })`.
+
+3. Open the picker:
+   - For native: `browser_press_key("Alt+ArrowDown")` (Chromium shortcut), OR
+   - For custom: `browser_click({ ref: input })` to open the widget.
+
+4. Probe the picker's open state:
+   ```js
+   () => {
+     const opened = !!document.querySelector('[role="dialog"]:not([hidden]), .calendar:not([hidden]), .datepicker-popup:not([hidden]), [class*="picker"][aria-expanded="true"]');
+     return { opened };
+   }
+   ```
+   If `opened === false`, the test is inconclusive (picker may be native-OS) — skip.
+
+5. Press `Tab` once. Probe focus:
+   ```js
+   () => ({ focused: document.activeElement.tagName + (document.activeElement.id ? '#' + document.activeElement.id : '') })
+   ```
+   If focus left the picker dialog entirely → the picker has no tabindex trap, that is fine.
+   If focus stayed inside but did NOT move to a day cell → the picker may have a keyboard trap.
+
+6. Press `ArrowRight` 3 times, then probe `document.activeElement`. If it didn't change at all → keyboard nav is broken inside the picker.
+
+7. If either Tab or Arrow-key navigation is broken inside the picker, emit:
+   ```json
+   {
+     "issueType": "datePickerKeyboardTrap",
+     "severity": "medium",
+     "selector": "<picker selector>",
+     "description": "Date picker opens but keyboard navigation (Tab / Arrow keys) does not move focus through calendar cells. Keyboard-only users cannot pick a date — fails WCAG 2.1.1."
+   }
+   ```
+
+8. Always press `Escape` at the end to close the picker before moving to the next widget.
 
 ### Step 11 — Final mandatory cleanup
 

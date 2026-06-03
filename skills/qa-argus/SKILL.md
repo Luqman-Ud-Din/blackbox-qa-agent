@@ -172,12 +172,12 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 
 Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
-- **Pipeline (8):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
+- **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
 - **Detection (36):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 66 skills**
+- **Total: 67 skills**
 
 ---
 
@@ -398,7 +398,7 @@ Resolved Settings
   App       : {appName}
   URL       : {baseUrl}
   Login     : {email} / ⬢⬢⬢⬢⬢⬢⬢⬢  {credSource}
-  Browsers  : {browsers}    Workers: {workers}
+  Browsers  : {browsers}    Workers: {workers} (parallel via qa-cell-worker subagents)
   Viewports : {viewports}   Headless: {headless}
   Dry run   : {dryRun}      Vision : {visionReview}
   Bug filing: {dryRun ? "disabled" : adoOrg + "/" + adoProject}
@@ -724,6 +724,103 @@ At the start of Step 5, read `customize.toml -> [resilience]` and apply on every
 
 **RESUME SUPPORT:** if `--resume {runId}` was passed, list existing files under `{project-root}/.tmp/{runId}/issues/`. Build a set of completed cellIds. Before starting each cell below, check `if (completedCellIds.has(cell.id)) continue;` -- skip cells already audited. This lets you recover from a hang or crash without re-running the entire audit. New cells append to the same `.tmp/{runId}/` directory.
 
+### Step 5.0 — Cell sharding (DYNAMIC parallelism, honors resolvedConfig.workers)
+
+🚨 **CRITICAL: read `resolvedConfig.workers` at runtime — do NOT hardcode.** This value comes from the user's settings (`workers = browsers.length × 4` by default, but the user can override). Changing it from 4 → 8 → 12 in the config MUST change the actual parallel-worker count on the next audit. Never read a stale or memoized value.
+
+```
+workers = resolvedConfig.workers          // 4, 8, 12, etc — whatever the user set
+totalCells = audit-plan.cells.length
+```
+
+**Branching rule (this is THE wire-up of the workers setting):**
+
+| workers value | Path taken |
+|---|---|
+| `1` | Step 5.1a — SERIAL loop (legacy path, same as pre-MCP behavior with workers=1) |
+| `>= 2` | Step 5.1b — PARALLEL dispatch via qa-cell-worker subagents |
+
+### Step 5.1a — Serial execution (workers=1 only)
+
+Run the per-cell loop in this orchestrator's own thread. This is the documented `For each cell` flow below (steps a → h.3 → i → j → k).
+
+### Step 5.1b — Parallel execution (workers >= 2, DEFAULT for MCP mode)
+
+**Sharding algorithm — split `audit-plan.cells` into `workers` chunks:**
+
+```
+chunks = []
+for (let i = 0; i < workers; i++) chunks[i] = []
+for (let i = 0; i < totalCells; i++) {
+  chunks[i % workers].push(audit-plan.cells[i])    // round-robin distribution
+}
+// Example: 144 cells / 4 workers = 4 chunks of 36 cells each
+//          144 cells / 8 workers = 8 chunks of 18 cells each
+//          144 cells / 12 workers = 12 chunks of 12 cells each
+```
+
+Round-robin balances per-route/per-browser cell complexity across workers (vs sequential which would put all of browser-1's cells on worker-0).
+
+**Parallel dispatch — emit N Agent calls in ONE message:**
+
+The orchestrator emits exactly `workers` Agent tool calls in a SINGLE assistant message. Claude's harness executes them concurrently. Each Agent gets its own conversation context and its own MCP RPC channel.
+
+```
+// IN ONE MESSAGE — multiple Agent tool calls:
+for (let i = 0; i < workers; i++) {
+  Agent({
+    subagent_type: "qa-cell-worker",
+    description: `Worker ${i+1}/${workers}: ${chunks[i].length} cells`,
+    prompt: `You are worker ${i} of ${workers}.
+
+Your assigned cells (process sequentially within your tab):
+${JSON.stringify(chunks[i])}
+
+Run context:
+  runId:          "${runId}"
+  baseUrl:        "${resolvedConfig.baseUrl}"
+  resolvedConfig: <full config including resilience, content, viewports, browsers>
+
+Follow qa-cell-worker/SKILL.md exactly:
+  1. browser_tabs({ action: "new" }) — acquire your own tab
+  2. For each cell: select tab, navigate, evaluate probes, screenshot, annotate, write JSONL
+  3. browser_tabs({ action: "close", tabId }) — release tab
+  4. Return summary { workerIndex, cellsProcessed, cellsSkipped, cellsTimedOut, findingsTotal }`
+  })
+}
+```
+
+**After all Agent calls return:**
+
+The harness blocks the orchestrator until ALL parallel Agent calls finish. Each returned summary is logged:
+
+```
+✅ Parallel execution complete:
+   worker 0: 36/36 cells, 412 findings, 0 timeouts
+   worker 1: 36/36 cells, 388 findings, 1 timeout (cell-052)
+   worker 2: 36/36 cells, 401 findings, 0 timeouts
+   worker 3: 36/36 cells, 394 findings, 0 timeouts
+   Total:    144/144 cells, 1595 findings, 1 timeout
+   Wall time: 24m 18s (vs ~1h 41m sequential — 4.1× speedup)
+```
+
+Each worker has already written its findings to `.tmp/{runId}/issues/cell-XXX.jsonl` — no merge step needed (the issues directory is the shared sink).
+
+Proceed to Step 5.7.5 (annotation sweep) as normal.
+
+**Failure isolation:**
+- If a worker crashes mid-chunk, its already-written cells are preserved.
+- Other workers continue unaffected.
+- The Step 5.7.5 annotation sweep + Step 7 validation gate handle any partially-annotated cells.
+- Use `--resume {runId}` to re-run just the missing cells.
+
+**Limitations (honest disclosure):**
+- Playwright MCP runs ONE browser process. Parallel TABS within that process give ~2-4× speedup via I/O overlap.
+- For full Nx speedup (matching pre-MCP Bash mode), run N MCP server instances. qa-preflight can be extended to set this up.
+- Even with tab-based parallelism, you'll see significant wall-clock improvement — 144-cell audit drops from ~100 min to ~25-30 min at workers=4.
+
+### Step 5.1a — Serial `for each cell` (the legacy path, used when workers=1)
+
 For each cell in `audit-plan.json` (grouped by browser, then by viewport):
 
 ```
@@ -740,17 +837,83 @@ For each cell (route � viewport � browser):
      to the cell JSONL IMMEDIATELY, skip remaining steps of this cell, continue to next cell.
   b'. browser_wait_for({ time: resilience.post_navigate_settle_ms })  // ~1.5s settle
   c. If any skill has preWait: N �  browser_wait_for(time = N)
-  d. Group enabled-skills-for-this-cell by viewport applicability + model:
-       - skipped: skill's applyOn doesn't include cell.viewportClass
-       - skipped: skill's viewportSensitive=false AND this isn't the
-                  viewport-leader cell for this route � browser
-       - Haiku tier: all enabled mechanical skills mapping to Haiku
-       - Sonnet tier: all enabled skills mapping to Sonnet
-       - skill-specific: each interactive skill runs its own MCP-tool sequence
-  e. Haiku tier:
-       Dispatch ONE batched browser_evaluate call that runs ALL enabled
-       Haiku-mechanical probes for this cell in one round-trip. Pass an
-       array of {name, probe} entries and return findings keyed by skill.
+  d. 🚨 **ORCHESTRATOR CONTRACT — MANDATORY skill list, NO INTERPRETATION ALLOWED.**
+
+       Build `enabledForCell` by SET OPERATION only — no LLM judgment, no prediction, no "this skill probably doesn't apply":
+       ```
+       enabledForCell = ALL_ENABLED_SKILLS.filter(s =>
+         (s.applyOn === 'all' || s.applyOn.includes(cell.viewportClass))
+         &&
+         (s.viewportSensitive === true || isViewportLeaderFor(s, cell))
+       )
+       ```
+
+       That is the ENTIRE filter. There is no other rule. You may NOT skip a skill because:
+       - "the page doesn't look like it has forms" → run qa-form-* anyway; the probe self-skips
+       - "this skill is for a different framework" → run it anyway; the probe self-skips
+       - "Sonnet thinks this is redundant with another skill" → run both; dedup handles overlap
+       - "the cell is broken" → run them all; broken cells emit cellTimeout, not silent skips
+
+       Self-skip happens INSIDE the probe (`return []` on first line if preconditions fail), NEVER at this step.
+
+       Then group:
+       - haikuBatch = enabledForCell.filter(s => modelFor(s) === 'haiku' && s.kind === 'probe')
+       - sonnetSkills = enabledForCell.filter(s => modelFor(s) === 'sonnet')
+       - interactiveSkills = enabledForCell.filter(s => s.kind === 'interactive')
+
+       LOG (mandatory):
+       ```
+       [cell {id}] enabled={enabledForCell.length}: haiku={haikuBatch.length}, sonnet={sonnetSkills.length}, interactive={interactiveSkills.length}
+       [cell {id}] haiku batch will run: {haikuBatch.map(s => s.name).join(', ')}
+       ```
+
+       If the log shows fewer than ~30 Haiku skills on a typical cell with 56 enabled in customize.toml, the orchestrator has BYPASSED the contract — abort the run with the error in (e) below.
+
+  e. Haiku tier — MUST batch EVERY skill in `haikuBatch`. No selection, no subset, no "optimization".
+
+       Build the batched browser_evaluate by INCLUDING EVERY probe from `haikuBatch`:
+       ```js
+       browser_evaluate({
+         function: `(probes, cellCtx) => {
+           const results = {};
+           for (const {name, probe} of probes) {
+             try {
+               results[name] = (new Function('return ' + probe))()(cellCtx);
+             } catch (e) {
+               results[name] = { error: e.message };
+             }
+           }
+           return results;
+         }`,
+         args: { probes: haikuBatch, cellCtx: { route, viewport, properNouns } }
+       })
+       ```
+
+       🚨 **CONTRACT ASSERTION (mandatory, no exceptions):**
+
+       Before the call, log:
+       ```
+       [cell {id}] Running {haikuBatch.length} Haiku probes
+       ```
+
+       After the call:
+       ```
+       expectedCount = haikuBatch.length
+       actualCount   = Object.keys(result).length
+       missingSkills = haikuBatch.map(s => s.name).filter(n => !(n in result))
+       if (actualCount !== expectedCount || missingSkills.length > 0) {
+         throw new Error(
+           `ORCHESTRATOR CONTRACT VIOLATED: expected ${expectedCount} probes in batched call, got ${actualCount}. ` +
+           `Missing: ${missingSkills.join(', ')}. ` +
+           `This is an orchestrator bug — the assistant did not include every enabled probe in the browser_evaluate call. ` +
+           `Audit ABORTED to prevent silent coverage loss.`
+         )
+       }
+       ```
+
+       The assertion above is the SAFETY NET that catches the historical bug where the orchestrator would pick 9 of 67 skills and silently drop the other 58. If you see this error fire, the orchestrator (you) shortcut the skill list. Re-include every skill from `haikuBatch` and re-run.
+
+       Skills whose probe returns `[]` are NORMAL — they self-skipped at runtime, which is the correct behavior. They still appear in `result` with an empty array. They count toward `actualCount`. Only skills MISSING ENTIRELY from `result` trigger the violation.
   f. Sonnet tier:
        For each Sonnet-classified skill, dispatch its probe/sequence on
        Sonnet (using Agent tool with subagent_type=qa-{skill-name}, 

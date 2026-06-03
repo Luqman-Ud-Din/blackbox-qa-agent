@@ -18,12 +18,13 @@ replaces:
 
 Single skill owning ALL form-security findings. Pure passive detection — no interaction. Single `browser_evaluate` round-trip per cell.
 
-## What it checks (9 issue types)
+## What it checks (10 issue types — gap-fix 2026-06-03)
 
 ### CSRF
 | issueType | severity | catches |
 |---|---|---|
 | `csrfTokenMissing` | high | POST form with no CSRF token (no hidden input, no data attr, no meta tag) |
+| `csrfTokenNotRotated` | medium | After successful submit, the CSRF token is unchanged — stale-token replay is possible (Phase 2: interactive) |
 
 ### Autocomplete
 | issueType | severity | catches |
@@ -43,6 +44,51 @@ Single skill owning ALL form-security findings. Pure passive detection — no in
 
 ## Self-skip
 If page has no `<form>` AND no captcha widgets visible → return `[]`.
+
+## Phase 2 — Interactive CSRF rotation test (NEW, added 2026-06-03)
+
+Phase 2 runs AFTER the passive probe completes IF:
+- A CSRF token was detected (hidden input named `csrf_token`, `_csrf`, `authenticity_token`, OR meta tag).
+- The page has a submittable form with valid-looking fields.
+- `customize.toml → [form] enable_csrf_rotation_test = true` (default: true).
+
+**Algorithm:**
+
+1. Capture the current CSRF token via `browser_evaluate`:
+   ```js
+   () => {
+     const hidden = document.querySelector('input[type="hidden"][name*="csrf" i], input[type="hidden"][name*="_token" i], input[type="hidden"][name="authenticity_token"]');
+     const meta   = document.querySelector('meta[name*="csrf" i]');
+     return {
+       hidden: hidden ? hidden.value : null,
+       meta:   meta   ? meta.getAttribute('content') : null
+     };
+   }
+   ```
+   Save as `token_before = { hidden, meta }`.
+
+2. Fill the form with safe valid values and submit (reuse the submit-state Phase from qa-form-validation if available).
+
+3. `browser_wait_for(time = 2000)` to let the server response settle.
+
+4. Re-capture the token via the same probe → `token_after`.
+
+5. Compare:
+   - If `token_before.hidden === token_after.hidden` AND both are non-empty → emit:
+     ```json
+     {
+       "issueType": "csrfTokenNotRotated", "severity": "medium",
+       "selector": "input[type='hidden'][name*='csrf']",
+       "description": "CSRF token (hidden input) is unchanged after submit. Stale token can be replayed in a CSRF attack. Rotate the token on every state-changing request."
+     }
+     ```
+   - Same check for meta tag.
+   - If both tokens changed → no finding (good).
+   - If token went to null after submit (e.g. page redirected, form disappeared) → no finding (inconclusive).
+
+**Skip Phase 2 if:**
+- Passive probe found `csrfTokenMissing` (no point testing rotation of a missing token).
+- Form submission would trigger destructive action (heuristic: form action contains `/delete`, `/destroy`, `/cancel-account`, or method is DELETE). In that case skip with a logged note.
 
 ## Probe (browser_evaluate)
 ```js

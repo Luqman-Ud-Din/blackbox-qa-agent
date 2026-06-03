@@ -7,9 +7,9 @@ needsSetup: false
 viewportSensitive: false
 ---
 
-## What it checks (35 issue types in 5 categories — Typography gap-fill 2026-06-03)
+## What it checks (43 issue types in 5 categories — Font gap-fill 2026-06-03)
 
-### Font loading & rendering (9)
+### Font loading & rendering (12)
 - `webFontFailed` (high) — @font-face declared but the file failed to load
 - `syntheticWeight` (medium for 700+/italic, low for 300/500/600) — browser is faking ANY weight or style because that face wasn't loaded
 - `noFontDisplay` (medium) — @font-face missing `font-display: swap/fallback/optional` → causes FOIT
@@ -19,8 +19,12 @@ viewportSensitive: false
 - `variableFontUnsupported` (low) — `font-variation-settings` declared on a font that isn't variable (settings have no effect)
 - `variableFontOutOfRange` (medium) — requested axis value outside the variable font's actual range (browser clamps silently)
 - `noOpticalSizing` (low) — body uses variable font but `font-optical-sizing` is not `auto` (loses size-appropriate rendering)
+- `fontDisplayBlock` (medium) — `@font-face` sets `font-display: block` → text stays invisible until webfont loads (FOIT)
+- `unusedFontWeight` (low) — `@font-face` declares a weight that no visible element uses (wasted payload, ~20-40 KB per face)
+- `iconFontAsWebFont` (low) — Font Awesome / Material Icons / etc. loaded as webfont (antipattern — use inline SVG)
+- `variableFontUnusedAxis` (low) — variable font loaded but no rule uses `font-variation-settings` (paying variable-font cost for static use)
 
-### Accessibility (12)
+### Accessibility (13)
 - `contrastFail` (high) — real WCAG ratio < 4.5:1 (normal) or < 3:1 (large text) — uses proper luminance math
 - `missingH1` (medium) — page has headings but no `<h1>`
 - `multipleH1` (medium) — page has more than one `<h1>`
@@ -33,20 +37,24 @@ viewportSensitive: false
 - `invalidHtmlLang` (low) — `<html lang="...">` value isn't a valid BCP 47 tag
 - `deepHeadingHierarchy` (low) — page uses H5/H6 as document structure (sign of improvised hierarchy)
 - `h2MissingInHierarchy` (low) — page jumps from H1 to H3+ with no H2 between (broken outline for SR users)
+- `languageFontMismatch` (medium) — page contains Arabic/CJK/Cyrillic/etc. chars but no loaded font covers that unicode-range (root cause of tofu)
 
-### Content quality (5)
+### Content quality (6)
 - `tofuGlyph` (high) — visible `□` or `�` replacement characters (font missing glyph)
 - `emptyTextElement` (medium) — heading/button/link with no text, no aria-label, no title
 - `extremeLetterSpacing` (low) — `letter-spacing` < -0.5px or > 3px on body text
 - `wallOfText` (medium) — content region > 1200 chars with too few structural breaks (~800+ chars per break)
 - `unstyledPullQuote` (low) — `<blockquote>` renders identical to body copy (no border/italic/quote marks)
+- `tooManyFontSizes` (low) — page uses >12 distinct font-sizes (consolidate into a coherent type scale)
 
-### Performance (5)
+### Performance (7)
 - `noFontPreload` (low) — custom fonts used but no `<link rel="preload" as="font">`
 - `corsFontPreloadMissing` (medium) — `<link rel="preload" as="font">` is missing the `crossorigin` attribute; browsers silently refuse the preload
 - `unreadableTextShadow` (medium) — text-shadow with blur > 4px making text fuzzy
 - `fontPayloadCount` (low) — page loads >4 font files (each blocks render)
 - `fontPayloadHeavy` (medium) — total font payload >300 KB (blocks LCP / Web Vitals)
+- `fallbackMetricMismatch` (low) — `@font-face` has no `size-adjust`/`ascent-override`/`descent-override` → layout shift on swap (hits CLS)
+- `fontFileNotSubsetted` (low) — single font file >100 KB (full unicode-range loaded; subset to ~20-30 KB)
 
 ### Layout (5)
 - `inconsistentRhythm` (low) — paragraphs use >3 different line-height ratios (vertical rhythm drift)
@@ -665,15 +673,308 @@ viewportSensitive: false
     }
   }
 
+  // 32. font-display: block (FOIT cause) — text is invisible until font loads.
+  // noFontDisplay catches missing declarations; this catches explicit "block".
+  try {
+    let blockFontFlagged = 0;
+    for (const sheet of document.styleSheets) {
+      if (blockFontFlagged >= 4) break;
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      if (!rules) continue;
+      const walkBlock = (rs) => {
+        for (const r of rs) {
+          if (blockFontFlagged >= 4) return;
+          if (r.type === CSSRule.MEDIA_RULE) { walkBlock(r.cssRules || []); continue; }
+          if (r.type !== CSSRule.FONT_FACE_RULE) continue;
+          const fd = (r.style && r.style.fontDisplay) || '';
+          if (fd.trim().toLowerCase() === 'block') {
+            const fam = (r.style.fontFamily || 'unknown').replace(/['"]/g, '');
+            blockFontFlagged++;
+            out.push({
+              issueType: 'fontDisplayBlock', severity: 'medium',
+              selector: `@font-face[${fam}]`,
+              description: `Font "${fam}" uses font-display: block — text stays INVISIBLE until the webfont loads (FOIT). Use "swap" for text-first or "optional" for performance-first.`
+            });
+          }
+        }
+      };
+      walkBlock(rules);
+    }
+  } catch (_) {}
+
+  // 33. Unused declared weights — @font-face declares weight that page never uses.
+  // Wastes payload. Cross-references all loaded @font-face weights against actual
+  // computed font-weights observed on visible text elements.
+  try {
+    const declaredWeights = new Map(); // family -> Set of weights
+    for (const sheet of document.styleSheets) {
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      if (!rules) continue;
+      const walkFF = (rs) => {
+        for (const r of rs) {
+          if (r.type === CSSRule.MEDIA_RULE) { walkFF(r.cssRules || []); continue; }
+          if (r.type !== CSSRule.FONT_FACE_RULE) continue;
+          const fam = (r.style.fontFamily || '').replace(/['"]/g, '').toLowerCase().trim();
+          const w   = (r.style.fontWeight || '400').trim();
+          if (!fam) continue;
+          // Skip variable fonts (weight is a range)
+          if (/^\s*\d+\s+\d+\s*$/.test(w)) continue;
+          if (!declaredWeights.has(fam)) declaredWeights.set(fam, new Set());
+          declaredWeights.get(fam).add(w);
+        }
+      };
+      walkFF(rules);
+    }
+    const usedWeights = new Map(); // family -> Set of weights
+    const sampleTextEls = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span, a, button, td, th, label');
+    let scanned = 0;
+    for (const el of sampleTextEls) {
+      if (scanned >= 300) break;
+      if (!el.innerText || el.innerText.trim().length < 1) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      const fam = (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').toLowerCase().trim();
+      const w   = cs.fontWeight || '400';
+      if (!fam) continue;
+      if (!usedWeights.has(fam)) usedWeights.set(fam, new Set());
+      usedWeights.get(fam).add(w);
+      scanned++;
+    }
+    let unusedFlagged = 0;
+    for (const [fam, declared] of declaredWeights) {
+      if (unusedFlagged >= 4) break;
+      const used = usedWeights.get(fam) || new Set();
+      for (const w of declared) {
+        if (used.has(w)) continue;
+        unusedFlagged++;
+        out.push({
+          issueType: 'unusedFontWeight', severity: 'low',
+          selector: `@font-face[${fam}]`,
+          description: `Font "${fam}" weight ${w} is loaded but never used on visible text. Remove the weight from @font-face to cut payload (~20-40KB per face).`
+        });
+        if (unusedFlagged >= 4) break;
+      }
+    }
+  } catch (_) {}
+
+  // 34. Icon font as web font — Font Awesome / Material Icons / Glyphicons etc.
+  // are best replaced by inline SVG (lighter, accessible, no FOUT).
+  // Detect by: (a) family name match, (b) unicode-range entirely in PUA U+E000-F8FF.
+  try {
+    const ICON_FONT_PATTERNS = /(font.?awesome|material.?icons?|glyphicons|bootstrap.?icons|feather|octicons|ionicons|fontello|streamline|tabler)/i;
+    let iconFlagged = 0;
+    const seenIcon = new Set();
+    for (const ff of document.fonts) {
+      if (iconFlagged >= 3) break;
+      const fam = (ff.family || '').replace(/['"]/g, '');
+      if (!fam || seenIcon.has(fam.toLowerCase())) continue;
+      let isIcon = false;
+      let reason = '';
+      if (ICON_FONT_PATTERNS.test(fam)) { isIcon = true; reason = 'name matches known icon-font family'; }
+      else {
+        const ur = (ff.unicodeRange || '').toUpperCase();
+        // PUA range U+E000-F8FF is the icon-font heartland
+        if (/U\+E[0-9A-F]{3}|U\+F[0-7][0-9A-F]{2}|U\+F8[0-9A-F]{2}/.test(ur)) {
+          isIcon = true; reason = `unicode-range ${ur.slice(0, 40)} sits in PUA (icon-font convention)`;
+        }
+      }
+      if (isIcon) {
+        seenIcon.add(fam.toLowerCase());
+        iconFlagged++;
+        out.push({
+          issueType: 'iconFontAsWebFont', severity: 'low',
+          selector: `@font-face[${fam}]`,
+          description: `Font "${fam}" appears to be an icon font (${reason}). Best practice: replace with inline SVG icons (lighter, accessible, no FOUT, color-controllable).`
+        });
+      }
+    }
+  } catch (_) {}
+
+  // 35. Fallback metric mismatch — no size-adjust / ascent-override / descent-override
+  // on a webfont causes a visible layout SHIFT when the font loads (CLS hit).
+  // Modern best practice: set these CSS Font Metric Override props to match
+  // fallback metrics to the webfont so the swap is invisible.
+  try {
+    let fallbackFlagged = 0;
+    for (const sheet of document.styleSheets) {
+      if (fallbackFlagged >= 4) break;
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      if (!rules) continue;
+      const walkFM = (rs) => {
+        for (const r of rs) {
+          if (fallbackFlagged >= 4) return;
+          if (r.type === CSSRule.MEDIA_RULE) { walkFM(r.cssRules || []); continue; }
+          if (r.type !== CSSRule.FONT_FACE_RULE) continue;
+          const st = r.style;
+          if (!st) continue;
+          // Skip fonts that explicitly opt out (font-display: optional won't cause CLS)
+          const fd = (st.fontDisplay || '').toLowerCase();
+          if (fd === 'optional') continue;
+          const hasOverride = (st.sizeAdjust && st.sizeAdjust !== 'normal') ||
+                              (st.ascentOverride && st.ascentOverride !== 'normal') ||
+                              (st.descentOverride && st.descentOverride !== 'normal') ||
+                              (st.lineGapOverride && st.lineGapOverride !== 'normal');
+          if (hasOverride) continue;
+          const fam = (st.fontFamily || 'unknown').replace(/['"]/g, '');
+          fallbackFlagged++;
+          out.push({
+            issueType: 'fallbackMetricMismatch', severity: 'low',
+            selector: `@font-face[${fam}]`,
+            description: `@font-face "${fam}" has no size-adjust / ascent-override / descent-override. Fallback font's metrics differ → layout shift when webfont loads (hits CLS). Use a tool like Fontaine or @font-face metric-override to match.`
+          });
+        }
+      };
+      walkFM(rules);
+    }
+  } catch (_) {}
+
+  // 36. Too many font sizes — design-system consistency. Pages with 12+ distinct
+  // font-sizes in visible text usually have ad-hoc styling instead of a scale.
+  try {
+    const sizeSet = new Set();
+    let sampled = 0;
+    for (const el of document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span, a, button, td, th, label, div')) {
+      if (sampled >= 500) break;
+      if (!el.innerText || el.innerText.trim().length < 2) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      const fs2 = parseFloat(cs.fontSize);
+      if (isNaN(fs2)) continue;
+      // Round to 0.5px to avoid sub-pixel noise
+      sizeSet.add((Math.round(fs2 * 2) / 2).toFixed(1));
+      sampled++;
+    }
+    if (sizeSet.size > 12) {
+      out.push({
+        issueType: 'tooManyFontSizes', severity: 'low', selector: 'body',
+        description: `Page uses ${sizeSet.size} distinct font-sizes (recommended ≤ 8 for a coherent type scale). Sizes: ${[...sizeSet].sort((a,b)=>parseFloat(a)-parseFloat(b)).slice(0, 12).join(', ')}${sizeSet.size > 12 ? '…' : ''}. Consolidate into a design-system scale.`
+      });
+    }
+  } catch (_) {}
+
+  // 37. Variable font loaded but axes never exercised. variableFonts (Map) was
+  // built in check 22; usedWeights (Map) was built in check 33. Cross-reference:
+  // any variable font whose only used weight matches its static default is wasted.
+  try {
+    let unusedAxisFlagged = 0;
+    for (const [fam, range] of variableFonts) {
+      if (unusedAxisFlagged >= 3) break;
+      // Look for any style rule with font-variation-settings on this family
+      let usesAxis = false;
+      for (const sheet of document.styleSheets) {
+        if (usesAxis) break;
+        let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+        if (!rules) continue;
+        const walkVS = (rs) => {
+          for (const r of rs) {
+            if (usesAxis) return;
+            if (r.type === CSSRule.MEDIA_RULE) { walkVS(r.cssRules || []); continue; }
+            if (r.type !== CSSRule.STYLE_RULE || !r.style) continue;
+            const fvs = (r.style.fontVariationSettings || '').trim();
+            if (!fvs || fvs === 'normal') continue;
+            const famFromRule = (r.style.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase();
+            if (famFromRule === fam) { usesAxis = true; return; }
+          }
+        };
+        walkVS(rules);
+      }
+      if (!usesAxis) {
+        unusedAxisFlagged++;
+        out.push({
+          issueType: 'variableFontUnusedAxis', severity: 'low',
+          selector: `@font-face[${fam}]`,
+          description: `Variable font "${fam}" is loaded with weight range [${range.wMin}-${range.wMax}] but no rule uses font-variation-settings to exercise an axis. You are paying the variable-font cost (~50% larger file) for static-font use. Either drop the variable variant or add font-variation-settings.`
+        });
+      }
+    }
+  } catch (_) {}
+
+  // 38. Language vs font coverage — page text contains characters outside the
+  // loaded fonts' unicode-range coverage. Root cause of tofuGlyph at scale.
+  try {
+    // Detect scripts present in the page body
+    const SCRIPT_RANGES = [
+      { name: 'Arabic',     re: /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/ },
+      { name: 'Hebrew',     re: /[\u0590-\u05FF]/ },
+      { name: 'Cyrillic',   re: /[\u0400-\u04FF]/ },
+      { name: 'Greek',      re: /[\u0370-\u03FF]/ },
+      { name: 'Devanagari', re: /[\u0900-\u097F]/ },
+      { name: 'CJK',        re: /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/ },
+      { name: 'Thai',       re: /[\u0E00-\u0E7F]/ }
+    ];
+    const bodyText = (document.body.innerText || '').slice(0, 5000);
+    const detectedScripts = SCRIPT_RANGES.filter(s => s.re.test(bodyText));
+
+    if (detectedScripts.length > 0) {
+      // Build coverage map from @font-face unicode-range
+      const coveredScripts = new Set();
+      // Latin is assumed covered by the default browser fallback so always add it
+      coveredScripts.add('Latin');
+      for (const ff of document.fonts) {
+        const ur = ff.unicodeRange || '';
+        // U+0-10FFFF means "all"
+        if (/U\+0-10FFFF|U\+0-1?0?ffff/i.test(ur) || ur === '') {
+          for (const s of detectedScripts) coveredScripts.add(s.name);
+          break;
+        }
+        // Heuristic: detect by range
+        if (/U\+0[678][0-9A-F]{2}|U\+0[678][0-9A-F]{3}/i.test(ur)) coveredScripts.add('Arabic');
+        if (/U\+05[8-9A-F][0-9A-F]/i.test(ur)) coveredScripts.add('Hebrew');
+        if (/U\+04[0-9A-F]{2}/i.test(ur)) coveredScripts.add('Cyrillic');
+        if (/U\+03[7-9A-F][0-9A-F]/i.test(ur)) coveredScripts.add('Greek');
+        if (/U\+09[0-7][0-9A-F]/i.test(ur)) coveredScripts.add('Devanagari');
+        if (/U\+4E00|U\+9F[0-9A-F]{2}|U\+30[4-9A-F]{2}/i.test(ur)) coveredScripts.add('CJK');
+        if (/U\+0E[0-7][0-9A-F]/i.test(ur)) coveredScripts.add('Thai');
+      }
+      let langFlagged = 0;
+      for (const s of detectedScripts) {
+        if (langFlagged >= 3) break;
+        if (!coveredScripts.has(s.name)) {
+          langFlagged++;
+          out.push({
+            issueType: 'languageFontMismatch', severity: 'medium',
+            selector: 'body',
+            description: `Page contains ${s.name} characters but no loaded @font-face declares a unicode-range covering them. Browser falls back to system font for that script → mixed typography or tofu glyphs. Load a font that includes ${s.name} unicode-range.`
+          });
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 39. Font not subsetted — large font file (> 100KB) loading the full
+  // unicode-range. Each large font blocks render. Recommend subsetting via
+  // Glyphhanger or Google Fonts &text= parameter.
+  try {
+    const resources = performance.getEntriesByType('resource');
+    const fontRes = resources.filter(r => {
+      const url = r.name || '';
+      const type = (r.initiatorType || '').toLowerCase();
+      return type === 'font' || /\.(woff2?|ttf|otf|eot)(\?|#|$)/i.test(url);
+    });
+    let bigFontFlagged = 0;
+    for (const r of fontRes) {
+      if (bigFontFlagged >= 3) break;
+      const kb = Math.round((r.encodedBodySize || r.transferSize || 0) / 1024);
+      if (kb < 100) continue;
+      const fname = (r.name || '').split('/').pop().split('?')[0];
+      bigFontFlagged++;
+      out.push({
+        issueType: 'fontFileNotSubsetted', severity: 'low', selector: 'head',
+        description: `Font file "${fname}" is ${kb} KB. Files this large usually contain the full unicode-range (Latin + Cyrillic + Greek + symbols, ~3000 glyphs). Subset to just the characters your page uses (typically ~250 glyphs = ~20-30 KB).`
+      });
+    }
+  } catch (_) {}
+
+
   return out;
 }
 ```
 
 ## Issue schema
 
-All 35 issue types use the canonical Issue schema:
+All 43 issue types use the canonical Issue schema:
 - `skill`: `qa-detect-typography-advanced`
-- `issueType`: one of the 35 listed above
+- `issueType`: one of the 43 listed above
 - `severity`: `high` | `medium` | `low` per the table
 - `selector`: CSS selector or descriptor (e.g., `@font-face[Foo]`)
 - `description`: human-readable explanation with concrete numbers
