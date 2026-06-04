@@ -20,12 +20,13 @@ Single skill owning structural form HTML and physical input dimensions. Separate
 
 | issueType | severity | catches |
 |---|---|---|
+| `inputsNotWrappedInForm` | high | Inputs + a submit button exist with NO `<form>` wrapper — breaks Enter-to-submit and password managers (common Angular/React anti-pattern) |
 | `formNoSubmit` | medium | Form has no visible submit button (no `button[type="submit"]`, `input[type="submit"]`, or `button:not([type])`) |
 | `inputHeightTooSmall` | medium | On mobile/tablet (vw ≤ 1024), input rendered height < 44px (below touch-target minimum) |
 | `formFieldNotFullWidth` | medium | On mobile (vw ≤ 768), form input rendered < 70% of parent width AND < 300px wide |
 
 ## Self-skip
-If no `<form>` elements visible → return `[]`.
+Return `[]` ONLY if there are **no visible testable inputs** (text/email/password/number/tel/url/search/date/textarea/select). **Do NOT skip on a missing `<form>`** — form-less input groups still get the touch-target/full-width checks AND get flagged as `inputsNotWrappedInForm` below.
 
 ## Probe (browser_evaluate)
 ```js
@@ -36,6 +37,21 @@ If no `<form>` elements visible → return `[]`.
   const vw = innerWidth;
   const isMobile = vw <= 768;
   const isMobileOrTablet = vw <= 1024;
+
+  // 0. inputsNotWrappedInForm — testable inputs + a submit button, but NO <form> wrapper
+  //    (the common Angular/React anti-pattern: breaks Enter-to-submit and password managers)
+  const TESTABLE = 'input[type="text"],input[type="email"],input[type="password"],input[type="number"],input[type="tel"],input[type="url"],input[type="search"],input[type="date"],input:not([type]),textarea';
+  const loose = [...document.querySelectorAll(TESTABLE)].filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest('form'); });
+  if (loose.length >= 1) {
+    const hasSubmit = [...document.querySelectorAll('button,[role="button"],input[type="submit"]')]
+      .some(b => { const r = b.getBoundingClientRect(); return r.width > 0 && /sign ?in|log ?in|sign ?up|submit|register|save|send|continue|next|create|update|apply|verify/i.test(b.textContent || b.value || b.getAttribute('aria-label') || ''); });
+    if (hasSubmit) {
+      out.push({ issueType: 'inputsNotWrappedInForm', severity: 'high',
+        selector: loose[0].id ? `#${loose[0].id}` : (loose[0].name ? `[name="${loose[0].name}"]` : loose[0].tagName.toLowerCase()),
+        description: `${loose.length} input(s) plus a submit button are NOT inside a <form> element. Breaks native Enter-to-submit and browser/password-manager autofill. Wrap the group in a <form>.`,
+        bbox: bb(loose[0]) });
+    }
+  }
 
   // 1. formNoSubmit
   for (const form of document.querySelectorAll('form')) {

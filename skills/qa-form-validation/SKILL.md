@@ -1,6 +1,6 @@
 ---
 name: qa-form-validation
-description: "Consolidated form validation skill. Owns ALL validation testing: empty-submit, invalid-format, real-time/blur feedback, whitespace, oversize input (10K), maxlength enforcement, error summary container, aria-describedby hint association, XSS/SQL/Unicode special-char handling. Replaces 5 overlapping form-validation skills."
+description: "Consolidated form validation skill. Tests BOTH real <form> elements AND form-less input groups (div+inputs+button, the common Angular/React case — so it runs on login/signup/forgot even without a <form> tag). Owns ALL validation testing on EVERY field: required/empty-submit, data-type, size/length, BOUNDARY values (min/max), format/syntax (pattern), CROSS-FIELD (password match, date range, confirm-email), real-time feedback, whitespace, oversize, maxlength, error-summary, aria-describedby, and XSS/SQL/Unicode injection on every field."
 model: haiku
 applyOn: all
 needsSetup: false
@@ -51,15 +51,22 @@ replaces:
 | `noPostRedirectGet` | medium | After successful submit, refresh re-POSTs the form (no 302 redirect → duplicate submission) | Phase 4: advanced |
 | `happySubmitNoFeedback` | high | Valid data submitted but the UI showed neither success nor error feedback | Phase 5: happy-path (gated) |
 | `validRejectedAsInvalid` | high | Form rejected legitimate valid input — over-strict validation blocks real users | Phase 5: happy-path (gated) |
+| `boundaryMaxNotEnforced` | medium | Number/date field accepts a value just OVER its `max` | Phase 2: 4f boundary |
+| `boundaryMinNotEnforced` | medium | Number/date field accepts a value just UNDER its `min` | Phase 2: 4f boundary |
+| `formatNotEnforced` | medium | Field with a `pattern` (or known format: phone/zip/card/date) accepts a malformed value | Phase 2: 4g format |
+| `passwordMismatchNotCaught` | high | Two password fields submit with different values, no "passwords don't match" error | Phase 2: 4.5 cross-field |
+| `dateRangeNotValidated` | medium | End date accepted before start date with no error | Phase 2: 4.5 cross-field |
+| `emailMismatchNotCaught` | medium | Email + confirm-email submit mismatched with no error | Phase 2: 4.5 cross-field |
 
 ---
 
 ## Self-skip conditions
 
-Skip silently (no findings, no error) if any of these are true:
-- No `<form>` elements visible on page
-- Zero testable inputs (text/email/number/tel/url/search/textarea, not disabled, not readonly, visible)
-- Page already in an error state (would produce noise)
+Skip silently (no findings, no error) ONLY if:
+- **Zero testable inputs** on the page (text/email/number/password/tel/url/search/date/textarea/select, visible, not disabled/readonly). ← This is the ONLY input-based skip.
+- Page already in an error state (would produce noise).
+
+🚨 **Do NOT skip just because there is no `<form>` element.** Modern apps (Angular/React) commonly build forms as `<div>` + inputs + a button with NO `<form>` tag — `probe.findTestableForms` detects these "form-less" groups too. The old "no `<form>` → skip" rule is what made this skill silently skip login/signup/forgot/register. It is removed.
 
 ---
 
@@ -92,19 +99,34 @@ Run `probe.checkPageHealth`. Save `initialBodyChildCount`. If page already in er
 
 #### Step 3 — Empty submit test (ONE per form)
 
-For each form with `formHasRequired` true:
-- `browser_evaluate`: install `submit` event interceptor on this form:
-  ```js
-  form.addEventListener('submit', e => { e.preventDefault(); window.__argusSubmitFired = true; }, { capture: true, once: true });
-  ```
-- `browser_click` form's submit button (already-disabled buttons are skipped)
-- `browser_wait_for(time = 500)`
-- Run `probe.checkValidationVisible({formIdx})`
-- If `errorCount === 0` AND `formHasRequired === true` → emit `noValidationOnEmptySubmit` (high)
+For each form (real `<form>` **OR** form-less group) with `formHasRequired === true` (or ≥2 fields when `required` can't be detected):
 
-#### Step 4 — Per-field testing (max 5 fields × 4 payloads = 20 round-trips per form)
+**3a. Install a submit guard that works for BOTH form types** (so the click can't actually submit, navigate, or create data — safe for login/signup):
+```js
+() => {
+  window.__argusSubmitFired = false;
+  document.querySelectorAll('form').forEach(f =>
+    f.addEventListener('submit', e => { e.preventDefault(); window.__argusSubmitFired = true; }, { capture: true, once: true }));
+  // form-LESS groups submit via a button → fetch/XHR/navigation. Block + flag them.
+  window.__argusOf = window.fetch;
+  window.fetch = function(){ window.__argusSubmitFired = true; return Promise.reject(new Error('argus-blocked')); };
+  window.__argusOx = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(){ window.__argusSubmitFired = true; };
+  window.onbeforeunload = e => { e.preventDefault(); return ''; };
+  return true;
+}
+```
+**3b.** `browser_click` the form's `submitSelector`. If that button is already `disabled`, skip (that's `submitNotDisabledWhenInvalid`, Phase 3).
+**3c.** `browser_wait_for(time = 600)`.
+**3d.** Run `probe.checkValidationVisible({formIdx})` and read `window.__argusSubmitFired`.
+**3e. Decide:**
+- An error/validation message appeared → validation works → no finding.
+- NO error AND `__argusSubmitFired === true` (a real `<form>` submit or a blocked fetch/XHR was attempted with empty fields) → **`noValidationOnEmptySubmit` (high)** — the form tried to submit empty with no feedback.
+**3f.** Restore: `browser_evaluate(() => { window.fetch = window.__argusOf; XMLHttpRequest.prototype.send = window.__argusOx; window.onbeforeunload = null; })`.
 
-For each field in each form, run this test sequence. **Order matters** — fastest/cheapest payloads first so we can abort early on a crash.
+#### Step 4 — Per-field testing (EVERY field, up to 25 per form)
+
+For **every** field in each form (not a 5-field sample), run this test sequence. **Order matters** — fastest/cheapest payloads first so we can abort early on a crash. (Old behavior capped at 5 fields, leaving most of a form untested; now it covers all fields up to 25.)
 
 **Test 4a — Type-invalid (real-time validation)**
 - `browser_evaluate`: clear field
@@ -144,12 +166,12 @@ For each field in each form, run this test sequence. **Order matters** — faste
 - Run `probe.checkFieldLength({formIdx, fieldIdx})`
 - If `maxLength` set AND `actualLength > maxLength` → emit `maxLengthNotEnforced` (medium)
 
-**Test 4e — Special-char payloads (only first 3 fields of first form, max 3 payloads = 9 round-trips total)**
+**Test 4e — Special-char / injection payloads (now EVERY field, not just the first 3)**
 
 For each of these payloads:
 ```
 { id: 'xss',     value: "<script>alert('argusXss')</script>" }
-{ id: 'sqlish',  value: "O'Reilly--DROP" }
+{ id: 'sqlish',  value: "O'Reilly'; DROP TABLE users;--" }
 { id: 'unicode', value: "测试 🚀 ñ ü العربية" }
 ```
 
@@ -161,6 +183,21 @@ For each of these payloads:
 - If `reflected` → emit `xssReflection` (severity from probe: `critical` or `high`)
 - Run `probe.checkPageHealth`
 - If `hasErrorPage` → emit `crashOnSpecialChars` (high), break out of payload loop for this field
+
+**Test 4f — Boundary-value testing (only when the field has `min`/`max`/`step` or is a number/date type)** — closes Category 4:
+- If `max` is set: clear → type `(max + step|1)` (just OVER the max) → Tab → `probe.checkInlineFeedback`. If `!errorVisible` → `boundaryMaxNotEnforced` (medium).
+- If `min` is set: clear → type `(min - step|1)` (just UNDER the min) → Tab → check. If `!errorVisible` → `boundaryMinNotEnforced` (medium).
+- For unbounded number fields: try `-1`, `0`, and a very large value (`9999999999`); if a clearly out-of-range value is accepted where context implies a range (age, quantity, price) → `uncertain: true` (escalate to Sonnet to judge).
+
+**Test 4g — Format / syntax testing (when the field has a `pattern`, or is a known format type)** — closes Category 5:
+- If `pattern` attribute is set: clear → type a value that violates the pattern (e.g. for `[0-9]+` type `abc`) → Tab → check. If `!errorVisible` → `formatNotEnforced` (medium).
+- Heuristic format checks by `name`/`placeholder` keyword (no pattern attr): `phone`/`tel` → type `abc123` ; `zip`/`postal` → `!!!` ; `card`/`cc` → `1234` ; `date` (text field) → `99/99/9999`. If accepted with no feedback → `formatNotEnforced` (low, `uncertain: true`).
+
+#### Step 4.5 — Cross-field / logical validation (per form)** — closes Category 7 (cross-field):
+- **Password match:** if the form has ≥2 `isPassword` fields → type DIFFERENT values in them (`Argus#123` vs `Argus#124`) → click submit (guarded as Step 3) → `probe.checkValidationVisible`. If no error → `passwordMismatchNotCaught` (high).
+- **Date range:** if the form has two date fields whose names match `start|from` and `end|to|until` → set end **before** start → Tab/submit → check. If no error → `dateRangeNotValidated` (medium).
+- **Confirm-email:** two `type=email` fields with names `email` and `confirm*`/`*confirm` → type mismatched → check → `emailMismatchNotCaught` (medium).
+Each cross-field check sets `uncertain: true` when the relationship is inferred from names (let Sonnet confirm the fields are actually a pair).
 
 #### Step 5 — Final page-health check
 
@@ -471,36 +508,75 @@ New issue types: `happySubmitNoFeedback` (high), `validRejectedAsInvalid` (high)
 ```
 
 ```js
-// probe.findTestableForms — Phase 2 setup, returns up to 2 forms × up to 5 fields
+// probe.findTestableForms — detects BOTH real <form> elements AND form-LESS input
+// groups (the common Angular/React case: <div> + inputs + a button, no <form> tag).
+// This is THE fix for "form-validation never runs on login/signup/forgot": those pages
+// are usually form-less, so the old <form>-only detector skipped them entirely.
+// Returns up to 6 forms × up to 25 fields, with min/max/pattern/password metadata
+// for boundary-value, cross-field and format tests.
 () => {
-  const forms = [...document.querySelectorAll('form')].slice(0, 2);
-  return forms.map((f, fi) => {
-    const fields = [...f.querySelectorAll(
-      'input[type="text"], input[type="email"], input[type="number"], ' +
-      'input[type="search"], input[type="tel"], input[type="url"], ' +
-      'input:not([type]), textarea'
-    )]
-      .filter(el => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly;
-      })
-      .slice(0, 5)
-      .map((el, fieldIdx) => ({
-        fieldIdx,
-        type: el.type || 'textarea',
-        name: el.name || el.id || `field${fieldIdx}`,
-        maxLength: el.maxLength > 0 ? el.maxLength : null,
-        required: el.required || el.getAttribute('aria-required') === 'true',
-        selector: el.id ? `#${el.id}` : `form:nth-of-type(${fi+1}) [name="${el.name}"]`
-      }));
-    return {
-      formIdx: fi,
-      formHasRequired: !!f.querySelector('[required], [aria-required="true"]'),
-      hasEmail: !!f.querySelector('input[type="email"]'),
-      submitSelector: `form:nth-of-type(${fi+1}) button[type="submit"], form:nth-of-type(${fi+1}) input[type="submit"], form:nth-of-type(${fi+1}) button:not([type])`,
-      fields
-    };
-  }).filter(f => f.fields.length > 0);
+  const FIELD_SEL = 'input[type="text"],input[type="email"],input[type="number"],' +
+    'input[type="password"],input[type="search"],input[type="tel"],input[type="url"],' +
+    'input[type="date"],input[type="time"],input[type="datetime-local"],input[type="month"],' +
+    'input:not([type]),textarea,select';
+  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly; };
+  const SUBMIT_TXT = /sign ?in|log ?in|sign ?up|sign ?on|register|submit|continue|next|save|send|create|update|apply|confirm|verify|search|add\b/i;
+  const cssPath = el => el.id ? '#' + CSS.escape(el.id) : (el.name ? `${el.tagName.toLowerCase()}[name="${el.name}"]` : el.tagName.toLowerCase());
+  const mapField = (el, i) => ({
+    fieldIdx: i,
+    type: (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') ? el.tagName.toLowerCase() : (el.type || 'text'),
+    name: el.name || el.id || `field${i}`,
+    maxLength: el.maxLength > 0 ? el.maxLength : null,
+    min: el.min !== '' && el.min != null ? el.min : null,     // for boundary tests
+    max: el.max !== '' && el.max != null ? el.max : null,
+    step: el.step !== '' && el.step != null ? el.step : null,
+    pattern: el.pattern || null,                              // for format/syntax tests
+    isPassword: el.type === 'password',                       // for cross-field match
+    required: el.required || el.getAttribute('aria-required') === 'true',
+    selector: cssPath(el)
+  });
+  const findSubmit = root => {
+    const cand = [...root.querySelectorAll('button,input[type="submit"],input[type="button"],[role="button"]')].filter(vis);
+    return cand.find(b => b.type === 'submit')
+        || cand.find(b => SUBMIT_TXT.test(b.textContent || b.value || b.getAttribute('aria-label') || ''))
+        || cand[cand.length - 1] || null;
+  };
+
+  const out = [];
+  const claimed = new Set();
+
+  // 1. Real <form> elements
+  for (const f of document.querySelectorAll('form')) {
+    const fields = [...f.querySelectorAll(FIELD_SEL)].filter(vis);
+    fields.forEach(el => claimed.add(el));
+    if (!fields.length) continue;
+    const sub = findSubmit(f);
+    out.push({ formIdx: out.length, isRealForm: true, formSelector: cssPath(f),
+      formHasRequired: fields.some(el => el.required || el.getAttribute('aria-required') === 'true'),
+      hasEmail: fields.some(el => el.type === 'email'),
+      submitSelector: sub ? cssPath(sub) : null,
+      fields: fields.slice(0, 25).map(mapField) });
+  }
+
+  // 2. FORM-LESS input groups — inputs not inside any <form>
+  const loose = [...document.querySelectorAll(FIELD_SEL)].filter(el => vis(el) && !claimed.has(el) && !el.closest('form'));
+  if (loose.length) {
+    const groups = new Map();
+    for (const el of loose) {
+      const c = el.closest('[class*="form" i],[class*="card" i],[role="dialog"],[class*="modal" i],[class*="login" i],[class*="signup" i],[class*="auth" i],section,fieldset') || document.body;
+      (groups.get(c) || groups.set(c, []).get(c)).push(el);
+    }
+    for (const [c, fields] of groups) {
+      const sub = findSubmit(c) || findSubmit(document.body);
+      out.push({ formIdx: out.length, isRealForm: false, formSelector: null,   // no <form> → submit is a button, not a form-submit event
+        formHasRequired: fields.some(el => el.required || el.getAttribute('aria-required') === 'true'),
+        hasEmail: fields.some(el => el.type === 'email'),
+        submitSelector: sub ? cssPath(sub) : null,
+        fields: fields.slice(0, 25).map(mapField) });
+    }
+  }
+
+  return out.filter(f => f.fields.length > 0).slice(0, 6);
 }
 ```
 

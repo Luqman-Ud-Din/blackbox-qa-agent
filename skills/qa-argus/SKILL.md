@@ -927,18 +927,33 @@ For each cell (route � viewport � browser):
 
        Self-skip happens INSIDE the probe (`return []` on first line if preconditions fail), NEVER at this step.
 
-       Then group:
-       - haikuBatch = enabledForCell.filter(s => modelFor(s) === 'haiku' && s.kind === 'probe')
-       - sonnetSkills = enabledForCell.filter(s => modelFor(s) === 'sonnet')
-       - interactiveSkills = enabledForCell.filter(s => s.kind === 'interactive')
+       Then group. 🚨 **The bucket key is the `interactive:` frontmatter boolean — there is NO `kind:` field.** (Historical bug fixed 2026-06-04: the code read `s.kind === 'interactive'`, but no skill frontmatter ever defined `kind:` — every skill uses `interactive: true|false`. So `interactiveSkills` computed EMPTY on every cell and the active phases in step (g) never ran a single time. Classify ONLY off `s.interactive`.)
+
+       Derive each skill's bucket EXPLICITLY from its real frontmatter fields:
+       ```
+       // 1. Interactive FIRST — any skill with `interactive: true` is driven as an MCP sequence (step g),
+       //    NEVER folded into the passive Haiku batch — regardless of its model.
+       interactiveSkills = enabledForCell.filter(s => s.interactive === true)
+
+       // 2. Everything else is a passive probe, split by model.
+       passiveSkills = enabledForCell.filter(s => s.interactive !== true)
+       haikuBatch    = passiveSkills.filter(s => modelFor(s) === 'haiku')
+       sonnetSkills  = passiveSkills.filter(s => modelFor(s) === 'sonnet')
+       ```
+       The three buckets are mutually exclusive and exhaustive: `haikuBatch.length + sonnetSkills.length + interactiveSkills.length === enabledForCell.length`. If that equation does not hold, you mis-bucketed — recompute.
 
        LOG (mandatory):
        ```
        [cell {id}] enabled={enabledForCell.length}: haiku={haikuBatch.length}, sonnet={sonnetSkills.length}, interactive={interactiveSkills.length}
        [cell {id}] haiku batch will run: {haikuBatch.map(s => s.name).join(', ')}
+       [cell {id}] interactive skills will be DRIVEN (active phases): {interactiveSkills.map(s => s.name).join(', ')}
        ```
 
-       If the log shows fewer than ~30 Haiku skills on a typical cell with 56 enabled in customize.toml, the orchestrator has BYPASSED the contract — abort the run with the error in (e) below.
+       🚨 **INTERACTIVE-BUCKET ASSERTION (mandatory):** ~36 skills carry `interactive: true` — both the true functional tests (forms / data-controls / nav / widgets / states) AND the MCP-sequence detectors (zoom-200, web-vitals, reflow, breakpoint-edge, adaptive-state, orientation-flip, touch-interactions…). ALL of them need a driven MCP sequence (step g) and must NEVER sit in the passive Haiku `browser_evaluate` batch. Two checks, both mandatory:
+       1. **Never empty:** if `interactiveSkills.length === 0` while ANY `interactive: true` skill is enabled in customize.toml, you re-introduced the `kind` bug — ABORT with `"ORCHESTRATOR CONTRACT VIOLATED: interactiveSkills is empty but interactive skills are enabled — classify off s.interactive, not s.kind."`
+       2. **Core functional set present:** every one of these enabled-and-applicable skills MUST appear in `interactiveSkills` — `qa-form-validation`, `qa-form-flow`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states` (plus `qa-test-auth-flow` / `qa-test-cases` where enabled). If any enabled one is missing from the bucket, you mis-bucketed it into the passive batch — ABORT with the same contract-violation error. These are the skills that produce the form/pagination/tab/state findings; if they aren't in the driven bucket, the audit is passive-only and worthless for functional coverage.
+
+       Sanity check on the SPLIT (not a magic absolute number — the threshold moved when interactive skills were correctly separated out): the Haiku passive batch is now ~15–20 on a typical cell, because the ~35 `interactive: true` skills are (correctly) in the driven bucket, not the passive batch. **The real contract is the exhaustiveness equation above** (`haiku + sonnet + interactive === enabled`), NOT a fixed Haiku count. Only abort for a bypass if that equation fails OR if `haikuBatch` is implausibly small (e.g. < 8) while dozens of passive detectors are enabled — that means you dropped passive probes. Do NOT abort merely because Haiku < 30; post-fix that is the EXPECTED, correct size.
 
   e. Haiku tier — MUST batch EVERY skill in `haikuBatch`. No selection, no subset, no "optimization".
 
@@ -998,7 +1013,9 @@ For each cell (route � viewport � browser):
 
        For EACH interactive skill in `interactiveSkills`:
        1. Check the skill's **Self-skip** preconditions via a quick `browser_evaluate`. If preconditions are absent (e.g. no `<form>`, no table/search/pager) → ledger mark `skipped` with the concrete reason. This is the ONLY valid skip.
-       2. If preconditions ARE present → you MUST drive the skill's "Orchestrator flow" / "Tests" section as a real sequence: `browser_type` / `browser_click` / `browser_wait_for` between `browser_evaluate` reads. Default model = Haiku (the asserts are deterministic comparisons). When a check returns `uncertain: true`, escalate THAT check to `escalation_model` (Sonnet) per Step 5.5 — do NOT route the whole skill to Sonnet.
+       2. If preconditions ARE present → you MUST drive the skill's "Orchestrator flow" / "Tests" section as a real sequence: `browser_type` / `browser_click` / `browser_wait_for` between `browser_evaluate` reads. **🚨 Use the skill's OWN declared model — `modelFor(s)`, NOT a blanket Haiku default:**
+          - **`modelFor(s) === 'sonnet'`** (e.g. `qa-test-auth-flow`, `qa-test-cases`, `qa-review-content`, `qa-review-hidden-text`): dispatch it as a **Sonnet subagent** exactly like step (f) — `Agent(subagent_type="general-purpose", model="sonnet", prompt="read {project-root}/skills/{skill}/SKILL.md and DRIVE its interactive sequence on this cell")`. These need Sonnet judgment (multi-step login, NL test-case interpretation, grammar/content review) — driving them on Haiku is a silent downgrade. (Before the 2026-06-04 bucket fix these ran correctly via step f; they MUST keep running on Sonnet now that they live in the interactive bucket.)
+          - **`modelFor(s) === 'haiku'`** (the functional tests — forms, data-controls, nav, widgets, states — and the resize/zoom/web-vitals detectors): the orchestrator drives the sequence inline; the asserts are deterministic comparisons. When a single check returns `uncertain: true`, escalate THAT check to `escalation_model` (Sonnet) per Step 5.5 — do NOT route the whole skill to Sonnet.
        3. Emit the skill's findings AND a ledger mark carrying interaction evidence:
           `{ ..., "status":"done|clean", "interacted": true, "evidence": "<before/after counts or text, e.g. rowsBefore=12 rowsAfter=12>" }`
 
@@ -1037,31 +1054,16 @@ For each cell (route � viewport � browser):
 
        Then write the cell's findings to `{run-dir}/issues/{cell.id}.jsonl`.
 
-       The annotation itself runs in step (h.3), **after** step (j) writes the JSONL:
+       The annotation runs in step (h.3) **IMMEDIATELY after step (j) writes the JSONL** — each cell is annotated the instant it's audited, from the SAME page state that produced the findings. Anyone watching sees it work cell-by-cell in real time.
 
-       (h.3) After JSONL is written for the cell, run the MCP-driven annotation pipeline — three sub-steps:
+       (h.3) **One deterministic command — pure Node, no MCP, no model:**
+           ```
+           node "{project-root}/scripts/annotate-cell.cjs" "{runId}" "{cell.id}"
+           ```
+           It decodes `{cell.id}-base.png`, draws the severity-colored bbox boxes directly onto it, writes `{cell.id}-annotated.png`, and stamps `annotatedScreenshotPath` into the JSONL — in one step, right here, while the page is still the one that was audited.
+           Exit 0 → annotated PNG written. Exit 2 → base PNG missing → re-take this cell's base screenshot, then retry. Exit 5 → no findings → skip. Exit 3 → JSONL missing → log.
 
-           **(h.3.a) Build HTML (pure Node, no MCP):**
-           ```
-           node "{project-root}/scripts/annotate-cell-prepare.cjs" "{runId}" "{cell.id}"
-           ```
-           Exit 0 → prints `{"htmlPath":"…","fileUrl":"file:///…","expectedAnnotatedPath":"…","findingCount":N}` on stdout. Parse it.
-           Exit 5 → cell had no findings; skip remaining (h.3) steps.
-           Exit 2/3/4 → base PNG missing / JSONL missing / schema fail; log and skip.
-
-           **(h.3.b) Render via MCP (zero local chromium):**
-           ```
-           browser_navigate(url = <fileUrl>, waitUntil = "load", timeout = 10000)
-           browser_take_screenshot(path = <expectedAnnotatedPath>, fullPage = true)
-           ```
-
-           **(h.3.c) Update JSONL (pure Node):**
-           ```
-           node "{project-root}/scripts/annotate-cell-finalize.cjs" "{runId}" "{cell.id}"
-           ```
-           Reads the annotated PNG, writes `annotatedScreenshotPath` into every finding atomically. Idempotent.
-
-           If any sub-step exits non-zero, the run is degraded — log the error and continue. Step 5.7.5 sweep will retry the cell at the end. `file-bugs.cjs` falls back to the base screenshot if no annotated PNG exists.
+           Because it's code (not an MCP render), the annotated screenshot for this cell **exists the moment the cell finishes — there is no model step to skip.** Step 5.7.5 is now only a backstop for any cell whose inline call errored; `file-bugs.cjs` falls back to the base screenshot only if no annotated PNG exists.
 
        Color scale used by the annotator:
            critical=#b91c1c, high=#ef4444, medium=#f97316, low=#3b82f6

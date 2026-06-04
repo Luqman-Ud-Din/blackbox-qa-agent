@@ -43,7 +43,7 @@ Single skill owning ALL form-security findings. Pure passive detection — no in
 | `captchaContainerHidden` | high | Captcha widget present but its container is hidden — users can't solve it |
 
 ## Self-skip
-If page has no `<form>` AND no captcha widgets visible → return `[]`.
+Return `[]` ONLY if the page has **no testable inputs** (`input`/`textarea`, excluding hidden/submit/button) AND no captcha widgets. **Do NOT skip on a missing `<form>`** — the autocomplete checks scan all inputs and the captcha check is page-level, so they run on form-less login/signup groups too. (CSRF detection still applies only to real `<form method=post>` — a form-less group submits via fetch, where the CSRF token would be an HTTP header that isn't visible in the DOM, so CSRF can't be judged there.)
 
 ## Phase 2 — Interactive CSRF rotation test (NEW, added 2026-06-03)
 
