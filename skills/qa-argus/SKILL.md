@@ -398,7 +398,7 @@ Resolved Settings
   App       : {appName}
   URL       : {baseUrl}
   Login     : {email} / ⬢⬢⬢⬢⬢⬢⬢⬢  {credSource}
-  Browsers  : {browsers}    Workers: {workers} (parallel via qa-cell-worker subagents)
+  Browsers  : {browsers}    Workers: {workers} (one browser per engine×viewport, parallel general-purpose subagents)
   Viewports : {viewports}   Headless: {headless}
   Dry run   : {dryRun}      Vision : {visionReview}
   Bug filing: {dryRun ? "disabled" : adoOrg + "/" + adoProject}
@@ -797,7 +797,7 @@ activeWorkers = workerList.length        // = browsers × viewports when all ser
 | workers value | Path taken |
 |---|---|
 | `1` | Step 5.1a — SERIAL loop (legacy path, same as pre-MCP behavior with workers=1) |
-| `>= 2` | Step 5.1b — PARALLEL dispatch via qa-cell-worker subagents |
+| `>= 2` | Step 5.1b — PARALLEL dispatch: one `general-purpose` subagent per (engine × viewport), each following qa-cell-worker/SKILL.md |
 
 ### Step 5.1a — Serial execution (workers=1 only)
 
@@ -821,13 +821,18 @@ for each w in workerList:
 The orchestrator emits exactly `workerList.length` Agent calls in a SINGLE assistant message. Each Agent gets its own conversation context AND its own engine-pinned MCP server (= its own browser window of the correct engine).
 
 ```
-// IN ONE MESSAGE — one Agent tool call per worker:
+// IN ONE MESSAGE — one Agent tool call per (engine × viewport) worker.
+// 🚨 subagent_type MUST be "general-purpose" — "qa-cell-worker" is a SKILL, not a spawnable
+//    agent type; passing it makes the Agent tool silently fall back and the model collapse
+//    your 4/8/12 workers into 2 arbitrary chunks (the observed "2 general-purpose workers" bug).
+//    Emit EXACTLY workerList.length Agent calls (one per engine×viewport) — never fewer.
 for (let i = 0; i < workerList.length; i++) {
   const { serverName, engine, viewportClass, viewport, cells } = workerList[i];
   Agent({
-    subagent_type: "qa-cell-worker",
+    subagent_type: "general-purpose",
     description: `Worker ${i+1}/${workerList.length} ${engine}×${viewportClass} on ${serverName}: ${cells.length} cells`,
     prompt: `You are worker ${i} of ${workerList.length}, testing ${engine} at the ${viewportClass} viewport (${viewport.width}×${viewport.height}).
+Read and follow {project-root}/skills/qa-cell-worker/SKILL.md EXACTLY for your per-cell loop.
 FIRST call mcp__${serverName}__browser_resize(${viewport.width}, ${viewport.height}) — your browser stays this size for all your cells.
 
 🚨 YOUR DEDICATED MCP SERVER: "${serverName}"
@@ -982,8 +987,10 @@ For each cell (route � viewport � browser):
        Skills whose probe returns `[]` are NORMAL — they self-skipped at runtime, which is the correct behavior. They still appear in `result` with an empty array. They count toward `actualCount`. Only skills MISSING ENTIRELY from `result` trigger the violation.
   f. Sonnet tier:
        For each Sonnet-classified skill, dispatch its probe/sequence on
-       Sonnet (using Agent tool with subagent_type=qa-{skill-name}, 
-       model=sonnet). The subagent receives skill SKILL.md + cell context
+       Sonnet (Agent tool with subagent_type="general-purpose", model="sonnet",
+       prompt = "read {project-root}/skills/qa-{skill-name}/SKILL.md and run it on this cell"). 
+       ⚠️ subagent_type MUST be "general-purpose" — qa-{skill-name} is a skill, not a spawnable agent type.
+       The subagent receives skill SKILL.md + cell context
        and returns findings.
   g. Interactive skills (form-validation, data-controls, navigation, widgets, states, etc.) — **ACTIVE PHASES ARE MANDATORY, not optional.**
 
