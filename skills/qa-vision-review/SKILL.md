@@ -136,7 +136,7 @@ The screenshot is attached. Look at it carefully and identify ONLY VISUAL anomal
 
 What to look for:
   croppedElement         — button/heading/content visibly cut off
-  brokenIcon             — broken-image placeholder, missing webfont glyph, empty icon box
+  brokenIcon             — a broken-image placeholder (failed <img>), a literal "tofu" □ box, or an "X"/empty square where an icon CLEARLY failed to load. This does NOT include caret / chevron / triangle glyphs (^ v < > ‹ › ▲ ▼ ⌃ ⌄ ∧ ∨) used as sort, expand/collapse, dropdown, or pagination indicators — those are valid, intentional UI controls, never a broken icon.
   misalignedElement      — form labels off-axis from inputs, columns drifting, vertical center broken
   modalPositionWrong     — modal off-screen, partially hidden, overlapping wrong region
   dropdownClipped        — open dropdown extending past viewport edge
@@ -162,6 +162,8 @@ Strict rules:
   - DO NOT flag minor design choices, brand-specific styling, or stylistic preferences.
   - DO NOT flag things that are arguably intentional (e.g. dark backgrounds, white space as design).
   - DO NOT re-detect DOM-level bugs (touch target size, missing alt, missing h1) — those are handled by other detectors.
+  - Sort indicators from component libraries are STANDARD, intentional UI — never a bug. This includes MUI `TableSortLabel` (a small up/down arrow ▲/▼ SVG), Ant Design, Bootstrap, PrimeNG, AG Grid sort carets/chevrons (^ v ‹ › ⌃ ⌄ ∧ ∨), etc. NEVER flag any of these as broken, missing, wrong, low-quality, or "should be an arrow" — the glyph shape (caret vs arrow) is a stylistic preference, which rule 2 already forbids flagging.
+  - CRITICAL for sort columns: MUI and most table libraries show the sort indicator ONLY on the currently-active (and sometimes hovered) column — inactive columns intentionally have NO visible arrow. A static screenshot captures no hover state, so most columns will correctly show no indicator. Do NOT flag a column as "missing sort indicator/arrow" — the absence is by design, not a bug. Sort affordance is a DOM/interaction concern handled by qa-test-data-controls, not vision.
   - Limit to 10 findings total. Pick the most impactful.
   - Output ONLY a valid JSON array. No prose, no markdown, no preamble.
 

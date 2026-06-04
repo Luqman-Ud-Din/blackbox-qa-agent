@@ -30,7 +30,7 @@ You are the bug filer. Your responsibilities:
 A **permanent, audited** script lives at `{project-root}/scripts/file-bugs.cjs`. It is the single source of truth for bug filing. It already handles:
 - Reading all `.jsonl` issues from the run directory
 - Deduplicating by `issueType + route + viewportClass + browser`
-- Severity sorting and 50-bug cap
+- Severity sorting; **files ALL issues by default (no cap)** — set `max_bugs`/`QA_MAX_BUGS` to a positive integer only if you want a spam cap
 - Writing the HTML body to **BOTH** `Microsoft.VSTS.TCM.ReproSteps` AND `System.Description`
   (Critical — ADO's Bug template displays ReproSteps; only setting Description leaves the ticket looking empty.)
 - Attaching the annotated screenshot (or clean screenshot fallback) via the ADO attachments REST API
@@ -333,7 +333,7 @@ const patchBody = [
 |---|---|---|---|
 | `dedup_key` | string | `issueType+url+viewport` | Fields used to deduplicate issues |
 | `area_path` | string | `""` | ADO area path; empty = project root |
-| `max_bugs` | integer | `50` | Maximum bugs to file per run (spam cap) |
+| `max_bugs` | integer | `0` (unlimited) | Max bugs filed per run. **Default `0` = file EVERY detected issue, never skip one.** Set a positive integer to re-enable a spam cap. Also overridable via env `QA_MAX_BUGS`. When a cap drops issues, the filer logs `⚠ CAP ACTIVE … will NOT be filed`. |
 | `attach_screenshots` | bool | `true` | Whether to attach screenshots to filed bugs |
 
 

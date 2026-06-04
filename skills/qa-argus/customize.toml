@@ -102,6 +102,22 @@ qa-detect-viewport-units        = true   # 100vh-not-dvh (address-bar clip) + re
 # Measures LCP, CLS, INP, TBT, TTFB, FCP via PerformanceObserver injection.
 # Same metrics Lighthouse uses, same thresholds Google ranks pages on.
 qa-detect-web-vitals            = true   # 6 vitals + long-tasks + DOM-size + main-thread-block
+
+# --- UX detectors (added 2026-06-04) ---
+# These cover what the a11y/overflow/touch skills don't: visual symmetry,
+# icon UX, action button quality, feedback gaps, spacing consistency, affordance.
+# Each is a deterministic browser probe — runs in the batched Haiku call.
+qa-detect-ux-symmetry           = true   # left/right padding, card edge mismatch, viewport centering
+qa-detect-ux-icons              = true   # icon-only buttons w/o tooltip, ambiguous icons, size/duplicates/color-only
+qa-detect-ux-actions            = true   # destructive without confirm, multiple primary CTAs, disabled without explanation
+qa-detect-ux-feedback           = true   # empty states, modal close/ESC, search clear, loading indicators
+qa-detect-ux-spacing            = true   # form field gaps, button group gaps, card padding, heading breathing room
+qa-detect-ux-affordance         = true   # cursor:pointer, link styling, input borders, focus visible, hover-only controls
+qa-detect-ux-table-layout       = true   # header width mismatch (dead space), phantom columns, missing sticky/zebra, empty Actions column
+qa-detect-ux-nav-icons          = true   # sidebar/tab icon-label consistency, icon size/style mix, active-state missing, label truncation
+qa-detect-ux-theme-consistency  = true   # focus color vs theme primary, link color drift, multiple primary hues, status-color misuse
+qa-detect-ux-table-data         = true   # excessive empty space, reverse Sr# numbering, all-empty column, sort indicator mix, action btn gap
+qa-detect-ux-modal-form         = true   # modal title plurality, modal not centered, required-asterisk mix, static text mistaken for field
 qa-detect-video                 = true   # <video> responsiveness + controls + YouTube/Vimeo iframe wrappers (v2.6.0, 2026-06-04)
 qa-detect-css-compat            = true   # cross-browser CSS gaps: missing vendor prefixes, Safari traps, var() no-fallback (v2.6.0, 2026-06-04)
 qa-detect-hidden-resources      = true   # desktop-only elements hidden on mobile but still downloading images/iframes (v2.6.0, 2026-06-04)

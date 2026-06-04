@@ -9,7 +9,7 @@ interactive: true
 ---
 
 ## Self-skip
-Skip ONLY if NONE of these is visible (a page with just a filter button or just a filter dropdown still has testable data controls and must NOT be skipped): `input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], [data-testid*="search"], [data-testid*="filter"], [aria-label*="search" i], [aria-label*="filter" i], select, [role="combobox"], [aria-haspopup="listbox"], button[aria-label*="filter" i], table, [role="table"], [role="grid"], [class*="paginat" i]`
+Skip ONLY if NONE of these is visible (a page with just a filter button or just a filter dropdown still has testable data controls and must NOT be skipped): `input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], [data-testid*="search"], [data-testid*="filter"], [aria-label*="search" i], [aria-label*="filter" i], select, [role="combobox"], [aria-haspopup="listbox"], button[aria-label*="filter" i], table, [role="table"], [role="grid"], [class*="paginat" i], [role="tab"], [role="tablist"], .mat-tab-label, .nav-tabs, .tab-button, [aria-selected], button[aria-label*="refresh" i], button[aria-label*="reload" i], input[type="date"]`
 
 ## Tests
 
@@ -76,6 +76,54 @@ Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, 
 5. **Page size:** if a rows-per-page control exists (`select`, `[aria-label*="per page" i]`, `[data-testid*="page-size"]`): read row count, change to a larger value, wait 600ms.
    - row count unchanged → `pageSizeNoEffect` (medium).
 
+**Tab groups / segmented controls — click EACH option and verify displayed values change:**
+
+This catches the "static dashboard" bug class: tabs like `Month | Quarter | Year` (or Day/Week/Month, or All/Active/Archived) where clicking different tabs leaves the page content unchanged.
+
+Define **valueFingerprint()** — a deterministic snapshot of the page's data region:
+- concatenate all visible numeric text (e.g. "45", "12,450", "387", "62%")
+- + first 10 visible `tr`/`[role=row]` text contents
+- + any visible `[data-value]`, `[data-count]` attribute values
+- + the first 200 chars of the main `[role="main"]` / `main` element's `innerText`
+- return as a single string
+
+Targets:
+- ARIA tab groups: `[role="tablist"] > [role="tab"]`
+- Bootstrap/Material tabs: `.mat-tab-label, .nav-tabs > li, .tab-button`
+- Segmented control buttons inside the same parent that share a "selected/active" class pattern (typically 2-5 sibling buttons, one with `.active`/`.selected`/`aria-selected=true`)
+- Chip-style filters: `.chip[aria-pressed], .filter-chip, [role="radio"]` groups of 2-5 siblings
+
+Cap: 3 tab groups per page. Within each group, test up to 4 options.
+
+1. Locate the first tab group. Read the currently-active option label. Compute `baseline = valueFingerprint()`.
+2. For each non-active option in the group (max 3):
+   - Click the option, wait 800ms (use `[resilience].post_navigate_settle_ms` if longer).
+   - Verify the option visually became active (aria-selected=true or .active class) → if not, record `uncertain: true` and skip the next steps for this option.
+   - Compute `fingerprintAfter = valueFingerprint()`.
+   - If `fingerprintAfter === baseline` → `tabHasNoEffect` (high), evidence: `{ groupSelector, from, to, baseline: baseline.slice(0,200), after: fingerprintAfter.slice(0,200) }`. The bug: clicking a different tab shows identical content — backend filter not wired or stale cache.
+   - Update `baseline = fingerprintAfter` for the next comparison (so we catch "Quarter and Year are identical even though Month differs").
+3. Reset by clicking back to the original active option. If the group is a segmented control instead of `[role="tab"]` → emit findings with `issueType: 'segmentedControlNoEffect'` instead (same shape).
+
+**Refresh / reload buttons — clicking should update something:**
+
+Refresh buttons (text/aria-label matching `/refresh|reload|update|sync/i`, or icon-only buttons with a circular-arrow / rotate icon class) that don't update displayed data are a common production bug.
+
+1. Locate the first visible refresh control. Compute `fp1 = valueFingerprint()` + snapshot any visible "last updated" / "as of" / "Updated HH:MM" timestamp text.
+2. Click the control. Wait 1500ms (refresh fetches typically take longer than tab switches).
+3. Compute `fp2 = valueFingerprint()` + timestamp.
+4. If `fp1 === fp2 AND timestampBefore === timestampAfter` → `refreshNoEffect` (medium), evidence: `{ buttonSelector, timestampBefore, timestampAfter }`. Either nothing fetched, or the response didn't update the DOM.
+   - Exception: if data is truly cached/idempotent and nothing changed server-side, this is correctly a non-bug. Emit with `uncertain: true` so Sonnet escalates on the rare case.
+
+**Date-range pickers — changing the range should change the data:**
+
+Targets buttons / dropdowns whose label matches `/last\s+\d+\s+(days|weeks|months)|today|yesterday|this\s+(week|month|year)|custom\s+range/i` or that contain a date input pair (`input[type="date"]`).
+
+1. Locate the first date-range picker. Read its current label. Compute `baseline = valueFingerprint()` and `rowsBefore = rowCount()`.
+2. Open it and pick a DIFFERENT preset (e.g. switch "Last 7 days" → "Last 30 days" or vice versa). For raw date pairs, set the start to 90 days earlier than current.
+3. Wait 1000ms → `fingerprintAfter`, `rowsAfter`.
+4. If `fingerprintAfter === baseline AND rowsAfter === rowsBefore AND rowsBefore > 0` → `dateRangeNoEffect` (high), evidence: `{ from, to, rowsBefore, rowsAfter }`. Either the filter is broken or the page ignores the new range.
+
+
 ## Issues
 | issueType | severity | description |
 |---|---|---|
@@ -90,4 +138,9 @@ Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, 
 | paginationNoEffect | high | Clicking "Next" did not load the next page of results |
 | paginationPrevBroken | medium | "Previous" did not return to the prior page |
 | paginationNextNotDisabledOnLastPage | medium | "Next" stays enabled past the last page |
+| pageSizeNoEffect | medium | Changing rows-per-page did not change the displayed row count |
+| tabHasNoEffect | high | Clicking a different tab in a tab group (e.g. Month / Quarter / Year) shows identical content — backend filter not wired |
+| segmentedControlNoEffect | high | Clicking a different option in a segmented control / chip group does not change displayed content |
+| refreshNoEffect | medium | Refresh / reload button does not update any displayed data or "last updated" timestamp |
+| dateRangeNoEffect | high | Changing the date-range filter does not change the displayed data or row count |
 | pageSizeNoEffect | medium | Changing rows-per-page did not change the number of rows shown |

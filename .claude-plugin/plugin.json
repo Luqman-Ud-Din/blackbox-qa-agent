@@ -1,6 +1,6 @@
 {
   "name": "argus-qa",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "Argus — Autonomous UI Auditor (v2.6). 77 skills covering layout, typography, accessibility, forms, navigation, data controls (search/filter/sort/pagination), content review, RTL, dark mode, CSS compat, video, and AI vision review. Interactive testing fires per cell (forms, filters, modals). Auto-installs Playwright MCP on first run, auto-invokes setup wizard, streams findings to disk, files Azure DevOps bugs with annotated screenshots.",
   "author": {
     "name": "Luqman-Ud-Din"

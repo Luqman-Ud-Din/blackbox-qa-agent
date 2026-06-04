@@ -174,10 +174,11 @@ Claude reads each skill's `SKILL.md` at runtime — names only listed here. **Th
 
 - **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
 - **Detection (40):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
+- **UX (11, added 2026-06-04):** `qa-detect-ux-actions`, `qa-detect-ux-affordance`, `qa-detect-ux-feedback`, `qa-detect-ux-icons`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 71 skills**
+- **Total: 82 skills**
 
 ---
 

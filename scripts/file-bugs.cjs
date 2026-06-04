@@ -55,7 +55,14 @@ const ORG_NAME = (CONFIG.ado.org || '').replace('https://dev.azure.com/', '').re
 const PROJECT  = CONFIG.ado.project;
 const APP      = (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].name) || 'app';
 const AREA     = CONFIG.ado.areaPath || PROJECT;
-const MAX_BUGS = 50;
+// Bug cap. DEFAULT = unlimited — file EVERY detected issue, never skip one.
+// To re-enable a spam guard, set a positive integer via env QA_MAX_BUGS
+// or automation.config.json → ado.max_bugs. A value of 0 / negative / unset = unlimited.
+const _maxRaw = (process.env.QA_MAX_BUGS != null && process.env.QA_MAX_BUGS !== '')
+  ? process.env.QA_MAX_BUGS
+  : (CONFIG.ado && CONFIG.ado.max_bugs);
+const _maxNum = parseInt(_maxRaw, 10);
+const MAX_BUGS = (Number.isNaN(_maxNum) || _maxNum <= 0) ? Infinity : _maxNum;
 
 if (!PAT)     { console.error('No ADO PAT found in env or .claude/secrets.json'); process.exit(1); }
 if (!ORG_NAME){ console.error('No ADO org configured'); process.exit(1); }
@@ -249,8 +256,11 @@ async function fileBug(issue) {
   const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   unique.sort((a, b) => (sevOrder[a.severity] ?? 2) - (sevOrder[b.severity] ?? 2));
 
-  const toFile = unique.slice(0, MAX_BUGS);
-  console.log(`  Filing ${toFile.length} bugs (cap: ${MAX_BUGS})\n`);
+  const toFile = MAX_BUGS === Infinity ? unique : unique.slice(0, MAX_BUGS);
+  if (MAX_BUGS !== Infinity && unique.length > MAX_BUGS) {
+    console.log(`  ⚠ CAP ACTIVE: ${unique.length} unique issues but max_bugs=${MAX_BUGS} → ${unique.length - MAX_BUGS} will NOT be filed. Set QA_MAX_BUGS=0 (or ado.max_bugs=0) to file ALL.`);
+  }
+  console.log(`  Filing ${toFile.length} bugs${MAX_BUGS === Infinity ? ' (no cap — filing ALL detected issues)' : ` (cap: ${MAX_BUGS})`}\n`);
 
   const results = [];
   let filed = 0, failed = 0;
