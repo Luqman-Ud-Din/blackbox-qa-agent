@@ -17,9 +17,12 @@ This is the **per-worker subagent** that qa-argus dispatches in parallel when `r
 
 Spawned by [qa-argus/SKILL.md Step 5.1](../qa-argus/SKILL.md) via the Agent tool. The parent orchestrator emits N parallel `Agent({ subagent_type: "qa-cell-worker", ... })` calls in ONE message, where N = `resolvedConfig.workers`.
 
-Each spawned worker receives:
-- `chunkIndex` — which chunk this worker owns (0, 1, 2, ..., workers-1)
-- `cells[]` — the slice of audit-plan.cells assigned to this worker
+Each spawned worker owns ONE (engine × viewport) and receives:
+- `serverName` — its DEDICATED MCP server (e.g. `playwright`, `pw-firefox-mobile`, `pw-webkit-tablet`). All browser calls use `mcp__{serverName}__*`. The server's `--browser` flag fixes the engine — the worker never sets it.
+- `engine` — `chromium` | `firefox` | `webkit`.
+- `viewportClass` + `viewport` — the viewport this worker tests (`{width, height}`). The worker resizes its browser to this ONCE and keeps it for all cells.
+- `chunkIndex` — which worker this is (0..activeWorkers-1)
+- `cells[]` — every route at this (engine, viewport): `audit-plan.cells.filter(c => c.browser === engine && c.viewportClass === viewportClass)`. It never touches another (engine, viewport).
 - `runId` — for writing findings to `.tmp/{runId}/issues/cell-XXX.jsonl`
 - `resolvedConfig` — full audit config (browsers, viewports, enabled skills, content settings, resilience knobs)
 - `baseUrl` — app under test
@@ -28,37 +31,41 @@ Each spawned worker receives:
 
 | # | Rule | Why |
 |---|---|---|
-| 1 | **MUST open its own browser tab** via `browser_tabs({ action: "new" })` AT START. Save the returned tab ID. | Without isolation, 4 workers all share the same tab and stomp on each other's navigation. |
-| 2 | **MUST select its own tab** via `browser_tabs({ action: "select", tabId })` before EVERY `browser_navigate` / `browser_evaluate` / `browser_take_screenshot`. | Other workers may have switched the active tab between your operations. |
-| 3 | **MUST close its tab** via `browser_tabs({ action: "close", tabId })` at the end (success OR failure). | Leaked tabs accumulate in the MCP browser across audit runs. |
+| 1 | **MUST use ONLY your assigned MCP server's tools** — every browser call prefixed `mcp__{serverName}__` (e.g. `mcp__pw-firefox-mobile__browser_navigate`). `{serverName}`, `{engine}`, `{viewport}` are given in your dispatch prompt. Your server = your own dedicated browser window of YOUR engine, sized to YOUR viewport. | True parallelism: each worker drives a SEPARATE browser process for one (engine × viewport) — zero contention, correct engine and size. |
+| 2 | **MUST log in on your own browser first** (Step 1) — your server runs `--isolated` so it has NO shared cookies. Navigate to the login path, fill email+password (mask password), submit, confirm redirect BEFORE auditing any cell. | Isolated browsers don't inherit the orchestrator's session; each worker authenticates its own browser. |
+| 3 | **MUST NOT open extra tabs or touch another server's tools.** Use your browser's default page. Never call the bare `playwright` tools unless that IS your assigned server. | You own a whole browser — tabs are unnecessary; touching a peer's server corrupts that worker's run. |
 | 4 | **MUST write findings to `{project-root}/.tmp/{runId}/issues/cell-XXX.jsonl`** — same path the serial loop used. | The downstream Step 5.7.5 annotation sweep and Step 7 bug filer read from this path. |
 | 5 | **MUST honor `resilience.cell_total_ms`** — if a cell exceeds the budget, append `cellTimeout` finding and continue to next cell in chunk. | Same protection the serial loop has. |
 | 6 | **MUST NOT cross-contaminate cells from other workers.** Only touch cells in YOUR `cells[]` array. | Parent orchestrator already partitioned cells; workers must respect partitioning. |
 
 ## Execution flow
 
-### Step 1 — Acquire tab
+### Step 1 — Size your browser to your viewport, then log in
+
+Use ONLY `mcp__{serverName}__` tools. FIRST fix your browser to your assigned viewport (it stays this size for ALL your cells), THEN log in (your browser is isolated — no shared cookies):
 
 ```
-result = browser_tabs({ action: "new" })
-myTabId = result.tabId
-LOG: "[worker {chunkIndex}] acquired tab {myTabId}, processing {cells.length} cells"
+mcp__{serverName}__browser_resize(viewport.width, viewport.height)   // e.g. 390×844 for mobile
+mcp__{serverName}__browser_navigate({ url: baseUrl + loginPath, waitUntil: "domcontentloaded" })
+mcp__{serverName}__browser_type(email into the email/username field)
+mcp__{serverName}__browser_type(password into the password field)   // mask password in all output
+mcp__{serverName}__browser_click(submit)
+mcp__{serverName}__browser_wait_for({ time: 5000 })                  // SPA redirect chain
+mcp__{serverName}__browser_evaluate("return location.pathname")      // confirm not still on loginPath
+LOG: "[worker {chunkIndex} on {serverName}] logged in, processing {cells.length} cells"
 ```
 
-If `browser_tabs new` fails (MCP server doesn't support tabs OR max tabs reached): fall back to using the default tab. Log: `[worker {chunkIndex}] WARN: tab acquisition failed, sharing default tab (parallelism reduced)`.
+If login fails (still on loginPath after retry): return early with `{ cellsProcessed: 0, loginFailed: true, serverName }` so the orchestrator can surface it. Do NOT silently audit a logged-out app.
+
+(If your assigned server is the single shared `playwright` and the orchestrator told you to share it, fall back to `browser_tabs({action:"new"})` for a tab — but with a dedicated `playwright-wN` server you own the whole browser and need no tabs.)
 
 ### Step 2 — Process each cell sequentially
 
-For each `cell` in `cells[]`:
+For each `cell` in `cells[]` (all browser calls prefixed `mcp__{serverName}__`):
 
-1. Select your tab:
-   ```
-   browser_tabs({ action: "select", tabId: myTabId })
-   ```
-
-2. Run the SAME per-cell execution that `qa-argus` Step 5.4 documents:
-   - `browser_navigate({ url: baseUrl + cell.route, waitUntil: "domcontentloaded", timeout: 15000 })`
-   - `browser_wait_for({ time: resilience.post_navigate_settle_ms })`
+1. Run the SAME per-cell execution that `qa-argus` Step 5.4 documents:
+   - `mcp__{serverName}__browser_navigate({ url: baseUrl + cell.route, waitUntil: "domcontentloaded", timeout: 15000 })`
+   - `mcp__{serverName}__browser_wait_for({ time: resilience.post_navigate_settle_ms })`
    - Run EVERY skill in this cell's `applicableSkills` (from the Step 5.0.A coverage ledger) — never a model-chosen subset. Batched Haiku probes in a single `browser_evaluate`; Sonnet skills dispatched one by one (workers can spawn their own sub-subagents); interactive skills run their MCP-tool sequences.
    - `browser_take_screenshot({ filename: "<ABSOLUTE-project-root>/.tmp/{runId}/screenshots/{cell.id}-base.png", fullPage: true })` — MUST be the full absolute path, NOT a plain name (a plain name lands in `.playwright-mcp/` and breaks annotation; see qa-argus Step 5.4h).
    - Write findings to `.tmp/{runId}/issues/{cell.id}.jsonl` (streaming append).
@@ -75,13 +82,14 @@ For each `cell` in `cells[]`:
    - Append `{ issueType: "cellTimeout", severity: "low", description: "Cell exceeded {N}ms budget" }` to JSONL
    - Skip to next cell
 
-### Step 3 — Release tab
+### Step 3 — Release browser
 
-Always run (even on errors):
+When all your cells are done (or on fatal error), optionally close your browser:
 ```
-browser_tabs({ action: "close", tabId: myTabId })
-LOG: "[worker {chunkIndex}] done — {processedCount}/{cells.length} cells, released tab {myTabId}"
+mcp__{serverName}__browser_close()
+LOG: "[worker {chunkIndex} on {serverName}] done — {processedCount}/{cells.length} cells"
 ```
+(Closing is optional — the MCP server reuses the browser next run. Closing frees RAM sooner when running 4 headed windows.)
 
 ### Step 4 — Return
 
@@ -89,11 +97,12 @@ Return a summary to the parent orchestrator:
 ```json
 {
   "workerIndex": <chunkIndex>,
+  "serverName":  "<your assigned MCP server>",
+  "loginFailed": <bool>,
   "cellsProcessed": <number>,
   "cellsSkipped":   <number>,
   "cellsTimedOut":  <number>,
-  "findingsTotal":  <number>,
-  "tabReleased":    <bool>
+  "findingsTotal":  <number>
 }
 ```
 
@@ -101,7 +110,10 @@ The parent orchestrator collects these N summaries when all parallel Agent calls
 
 ## Limitations & honesty
 
-- **True parallelism depends on the Playwright MCP server.** Microsoft's official Playwright MCP runs ONE browser process and serializes MCP RPCs internally. Workers running in parallel browser **tabs** within that process get ~2-4× speedup (mostly I/O overlap), not the full Nx Bash-mode delivered. To get full Nx speedup, run N separate MCP server instances (`claude mcp add playwright-w1 ...`, `claude mcp add playwright-w2 ...`, ...) and route each worker to a different server. The qa-preflight skill can be extended to do this on first run.
+- **True parallelism = one browser per (engine × viewport).** `.mcp.json` declares a server for each combination (`playwright` = chromium-desktop primary; `pw-{engine}-{viewport}` for the rest), each `@playwright/mcp --isolated --browser {engine}` (headed by default). `qa-preflight` regenerates `.mcp.json` to match your `browsers × viewports` selection: chromium → 4 windows, +webkit → 8, all three → 12. Each worker resizes its own browser to its viewport and audits all routes there, concurrently with the others.
+- **If only the single `playwright` server is present** (user didn't update/restart), workers fall back to TABS in one shared browser — ~2-4× I/O-overlap speedup, not separate windows. The orchestrator detects this at Step 5.0 (`availableServers`) and caps `activeWorkers` accordingly.
+- **Pool size caps the worker count.** `activeWorkers = min(workers, availableServers)`. To run more than 4 dedicated browsers, add more `playwright-wK` entries to `.mcp.json` and restart. Note: each headed browser uses real RAM/CPU — 4 is a sensible default; 8–12 headed windows is heavy.
+- **Each browser is isolated** (`--isolated`), so every worker logs in independently (Step 1). No shared session.
 - **Workers do NOT share findings.** Each worker writes to its own cell JSONL files; the parent merges by globbing the issues directory. There's no shared state.
 - **Failures are isolated.** If worker 2 crashes, workers 0, 1, 3 keep running. Their findings are preserved.
 

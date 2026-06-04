@@ -49,6 +49,8 @@ replaces:
 | `noRateLimitOnSubmit` | low | 10× rapid submit accepted without throttle/429 — DOS risk | Phase 4: advanced |
 | `backNavLosesFormData` | medium | Filling form, navigating away, then back via browser back-button loses all entered data | Phase 4: advanced |
 | `noPostRedirectGet` | medium | After successful submit, refresh re-POSTs the form (no 302 redirect → duplicate submission) | Phase 4: advanced |
+| `happySubmitNoFeedback` | high | Valid data submitted but the UI showed neither success nor error feedback | Phase 5: happy-path (gated) |
+| `validRejectedAsInvalid` | high | Form rejected legitimate valid input — over-strict validation blocks real users | Phase 5: happy-path (gated) |
 
 ---
 
@@ -284,6 +286,26 @@ This test depends on the server actually rejecting the sentinel; skip if the ser
    ```
 
 This is server-side; only emit if you confirmed the form actually POSTs to the same origin (CSP/CORS allows it).
+
+### Phase 5 — Happy-path success (GATED — OFF by default)
+
+🚨 **Runs ONLY when `customize.toml [safe_testing] allow_form_submit = true`.** This phase fills VALID data and submits → it **creates a real record** on the target. Default is off, so the audit never mutates data unless you opt in (point it at a dev/sandbox).
+
+**Gate check FIRST:** if `allow_form_submit !== true`, OR `safe_routes` is non-empty and the current route is not in it → SKIP Phase 5 entirely, emit nothing, record ledger evidence `happyPath: "skipped (gated off)"`.
+
+When enabled:
+1. Fill every required + visible field with a VALID value by type:
+   - email → `argus.qa+{runId}@example.com` · tel → `+15555550123` · number → a mid-range valid value · url → `https://example.com`
+   - date → today · select → first non-placeholder option · required checkbox → check
+   - text / textarea → `Argus QA test {runId}` (the `{runId}` marker makes the record identifiable for cleanup)
+2. Confirm submit is enabled, `browser_click(submit)`, wait 1500ms.
+3. Detect success via ANY of: a success toast/alert (`[role=status], .success, .toast-success`), a redirect to a confirmation/list route, or the form clearing/closing.
+   - **Success** → no finding; evidence `happyPath: "success: {signal}"`.
+   - **No success AND no error shown** → `happySubmitNoFeedback` (high) — valid submit gave the user neither confirmation nor error.
+   - **Validation error on VALID data** → `validRejectedAsInvalid` (high) — the form rejected legitimate input (over-strict validation blocks real users); include field + message. If it's plausibly a real business rule → set `uncertain: true` to escalate to Sonnet.
+4. **Cleanup:** if `cleanup_after_submit = true` and the app shows a delete/undo for the just-created record (match the `{runId}` marker), attempt it; log success/failure, never fail the audit on cleanup.
+
+New issue types: `happySubmitNoFeedback` (high), `validRejectedAsInvalid` (high).
 
 ---
 

@@ -92,6 +92,11 @@ qa-detect-adaptive-state        = true   # dark/RM/forced-colors/contrast in one
 qa-detect-touch-interactions    = true   # real TouchEvent dispatch (hover-only detection)
 qa-detect-loading-states        = true   # fetch interceptor throttle + multi-interval snapshot
 
+# --- Responsiveness gap-fills (v2.5.0, 2026-06-04) ---
+qa-detect-viewport-parity       = true   # features/columns/actions present on desktop but dropped on mobile/tablet (resize-compare)
+qa-detect-fluid-sweep           = true   # overflow at in-between widths (600/900/1100) + extremes (320/1920) — runs once per route
+qa-detect-viewport-units        = true   # 100vh-not-dvh (address-bar clip) + retina-blurry images
+
 # --- Performance: Core Web Vitals (v2.3.0, 2026-06-03) ---
 # Measures LCP, CLS, INP, TBT, TTFB, FCP via PerformanceObserver injection.
 # Same metrics Lighthouse uses, same thresholds Google ranks pages on.
@@ -149,6 +154,22 @@ track_dedup_count_in_summary     = true    # emit dedupCount totals to run-summa
 [dedup.families]
 # Example:
 # my_custom_family = ["myCustomIssueType1", "myCustomIssueType2"]
+
+# Functional happy-path testing  (added 2026-06-04)
+# Negative-path form validation (empty/invalid submit, double-submit, etc.) is ALWAYS safe — it gets
+# rejected, creates no data — and always runs. Happy-path submit (fill VALID data → submit → confirm
+# success) CREATES REAL RECORDS on the target, so it is OFF by default. Turn on only against a dev/sandbox.
+[safe_testing]
+allow_form_submit    = false   # true → qa-form-validation Phase 5 submits valid data to verify the success path. WARNING: creates real records.
+cleanup_after_submit = false   # if the app exposes a delete/undo for the created record, attempt it after a happy-path submit
+safe_routes          = []      # restrict happy-path submit to these routes only (empty = all forms when allow_form_submit = true)
+
+# Parallelism — ONE browser per (engine × viewport), added 2026-06-04.
+# The viewport IS the parallelism unit: each engine opens one browser per viewport class, concurrently.
+# Total browser windows = (resolved browsers) × (viewport classes). chromium→4, +webkit→8, all three→12.
+# qa-preflight generates .mcp.json to match your browser×viewport selection (and asks you to restart).
+[parallelism]
+headed = true    # browsers visible (the .mcp.json default — no --headless flag). For headless (CI / 12-window pools), ADD "--headless" to each server's args in .mcp.json (or set this false and let preflight regenerate).
 
 # Resilience  (added 2026-06-02 after qa-20260602-005 hang at cell-004)
 # These caps prevent a single hanging page from killing the entire audit.

@@ -105,6 +105,40 @@ or
    To upgrade later: npm install -g @playwright/mcp@latest && claude mcp add playwright -- npx "@playwright/mcp@latest"
 ```
 
+### Check 1.5 — Generate `.mcp.json` to match (browsers × viewports), then verify readiness
+
+Parallelism is one browser per (engine × viewport). The `.mcp.json` server pool must therefore equal `resolvedConfig.browsers × resolvedConfig.viewports[].class`. This check keeps them in sync — so when the user changes browsers or viewports, the pool follows.
+
+**1. Compute the required server set** (`serverFor(engine, vp)` from qa-argus Step 5.0: chromium-desktop = `playwright`, else `pw-{engine}-{vp}`):
+```
+required = {}    // serverName -> engine
+for engine in resolvedConfig.browsers:
+  for vp in resolvedConfig.viewports.map(v => v.class):
+    required[serverFor(engine, vp)] = engine
+```
+
+**2. Compare to the current `{project-root}/.mcp.json`.** If the set of server names differs:
+- Write `.mcp.json` with exactly those servers (Write tool — it is a data file, NOT a script). Each entry:
+  `"<name>": { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "<engine>"] }`
+  (add `"--headless"` to args when `[parallelism].headed = false`).
+- Then HARD STOP with a restart message (MCP servers load only at startup):
+  ```
+  🔁 Browser pool updated for your selection ({browsers} × {viewports} = {N} browsers).
+     Fully restart Claude Code, then re-run the audit — the {N} browser windows will open.
+  ```
+
+**3. If `.mcp.json` already matches**, verify each required server actually connected (its `mcp__{server}__browser_navigate` tool exists):
+```
+for (server, engine) in required:
+  if mcp__{server}__browser_navigate NOT registered:
+    WARN (do NOT hard stop):
+      "⚠ {server} ({engine}) not connected — run `npx playwright install {engine}` then restart.
+       Its cells will be reported as degraded (Step 5.9), never silently dropped."
+```
+Log: `✓ Browser pool: {browsers} × {viewports} = {N} dedicated browsers, all connected`.
+
+firefox/webkit browser binaries are installed by `install.bat` / `npx playwright install`; a bare `/plugin install` gives chromium only — preflight will tell the user exactly what to install.
+
 ### Check 2 — Local Node (ALWAYS runs, MCP or Bash mode)
 
 The plugin's permanent scripts (`scripts/annotate-cell-prepare.cjs`, `scripts/annotate-cell-finalize.cjs`, `scripts/file-bugs.cjs`, etc.) are **pure Node, no external npm deps**. They run on the Node runtime alone.

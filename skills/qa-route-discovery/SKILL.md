@@ -30,7 +30,7 @@ These probes use `fetch()` inside the current page — no navigation required. T
 
 1. Already at `baseUrl + '/'` from Pass 0 (no fresh navigation needed unless Pass 0 wasn't run)
 2. `browser_evaluate(probe.injectInterceptor)` — install history + hashchange tracker
-3. `browser_evaluate(probe.expandCollapsedNav)` — open every safe `[aria-expanded="false"]` toggle inside nav areas
+3. `browser_evaluate(probe.expandCollapsedNav)` — open every collapsed nav group (ARIA toggles *and* non-ARIA parents containing a hidden submenu). Repeat until it returns `expanded === 0` (max 3 rounds) to open nested levels
 4. `browser_evaluate(probe.scanNavItems)` returns up to 6 top-level nav-item texts. For each: `browser_hover(text)` then a 400ms wait — reveals hover-only mega menus
 5. `browser_evaluate(probe.harvestAnchors)` → list of hrefs
 6. `browser_evaluate(probe.readIntercepted)` → returns `{paths, hashes}`
@@ -48,8 +48,12 @@ These probes use `fetch()` inside the current page — no navigation required. T
 5. `browser_wait_for(time = 5000)` — SPA redirect chain
 6. `browser_evaluate("return location.pathname")` — if still equals loginPath, write `loginSucceeded: false` and SKIP Pass 2
 7. `browser_evaluate(probe.injectInterceptor)` — re-install tracker on authenticated session
-8. `browser_evaluate(probe.expandCollapsedNav)`
-9. `browser_evaluate(probe.scanNavItems)` → for first 6 items: `browser_hover(text)` + 400ms wait — reveal hover menus
+8. **Sidebar tree expansion — ITERATIVE (this is what fills the dropdown gap).** Repeat up to 3 rounds:
+   a. `browser_evaluate(probe.expandCollapsedNav)` — opens collapsed groups (ARIA *and* non-ARIA parents containing a hidden submenu). Capture the returned `expanded` count.
+   b. `browser_evaluate(probe.harvestAnchors)` **and** `browser_evaluate(probe.harvestRouterAttrs)` — collect the child links the expansion just revealed (a collapsed child only becomes a harvestable `<a href>` AFTER its parent is opened).
+   c. If `expanded === 0` for the round → stop (nothing new opened). Otherwise loop — this reveals one nested level per round.
+   This ordering matters: expansion BEFORE harvest, repeated, is the fix for collapsed dropdown children that the single-pass flow missed.
+9. `browser_evaluate(probe.scanNavItems)` → returns nav labels now visible (including revealed children). For first 6 items: `browser_hover(text)` + 400ms wait — reveal hover menus
 
 10. Run harvest strategies **in this order** (sequence matters — bundle harvest runs LAST so lazy chunks have loaded):
 
@@ -152,6 +156,32 @@ For each discovered route, run this enrichment block. Process routes in batches 
    - `p !== probePath` → app redirected the 404. Record `{ path: '__not_found__', title, h1Text, kind: '404', redirectsTo: p, source: 'edgeProbe' }` AND make sure `p` is in the main routes set
 5. (Optional) Repeat once unauthenticated for completeness
 
+### Pass 5 — Sidebar coverage reconciliation (no silent dropdown miss)
+
+This is the route-discovery finish-gate: it guarantees every clickable sidebar item produced a route, so a dropdown group can never be silently dropped (the failure that lost `/billing-info`, `/promo-code-apply`, `/email-templates` on a prior run).
+
+Run in the authenticated context, from a canonical page (`browser_navigate(baseUrl + '/')` + 1s wait):
+
+1. **Fully expand the sidebar.** Loop `browser_evaluate(probe.expandCollapsedNav)` until it returns `expanded === 0` (max 4 rounds). Every group is now open.
+2. **Enumerate every nav label.** `browser_evaluate(probe.scanNavItems)` with the full seen-set → returns every visible nav item label, now including the revealed dropdown children.
+3. **Reconcile against discovered routes.** For each label whose text does NOT already correspond to a route in the candidate set:
+   - `browser_navigate(baseUrl + '/')` → 800ms wait (reset; Reset-between-actions rule)
+   - re-expand if needed so the label is visible, then `browser_click(text)` → 1200ms wait
+   - `browser_evaluate("return location.pathname")`
+   - If the pathname is a new same-origin route → add it `{ path, requiresAuth: true, source: 'navReconcile' }`
+   - If clicking it did nothing (pure parent toggle, no navigation) → it's a group header, not a route; mark resolved
+4. **Log the gate result (mandatory):**
+   ```
+   🧭 Sidebar reconciliation
+      Nav items found : {N}
+      Mapped to route : {mapped}
+      Newly added     : {added}  → {paths}
+      Unresolved      : {unresolved}  → {labels}   ← MUST be surfaced, never dropped silently
+   ```
+   Any `Unresolved` nav label (a clickable item that produced no route and isn't a group header) is logged by name — a sidebar entry must never disappear without a trace. If `unresolved > 0`, the discovery is degraded but continues; the labels tell you exactly what to investigate.
+
+Hard caps for this pass: max 4 expand rounds, max 30 reconcile-clicks, 1.2 s per click — bounded like the other passes.
+
 ---
 
 ## Probes (browser_evaluate)
@@ -251,31 +281,59 @@ For each discovered route, run this enrichment block. Process routes in batches 
 ```
 
 ```js
-// probe.expandCollapsedNav — clicks safe nav toggles only. Stricter filter to avoid destructive actions.
+// probe.expandCollapsedNav — opens collapsed dropdown groups inside nav areas.
+// Matches BOTH ARIA toggles ([aria-expanded=false]) AND non-ARIA parents that
+// merely CONTAIN a currently-hidden submenu (the common Angular/custom sidebar
+// case with a chevron icon and a click handler but no aria-expanded).
+// Returns { expanded } = number of groups opened THIS call. Call it repeatedly
+// (the orchestrator loops until expanded === 0) to open nested levels.
 () => {
   const navAreas = document.querySelectorAll(
     'nav, aside, [role=navigation], [role=menubar], ' +
-    '[class*=sidebar], [class*=Sidebar], [class*=sidenav], [class*=drawer]'
+    '[class*=sidebar], [class*=Sidebar], [class*=sidenav], [class*=side-nav], ' +
+    '[class*=drawer], [class*=menu], [class*=Menu]'
   );
-  let expanded = 0;
+  const DANGER = /logout|sign.?out|delete|remove|disconnect|danger|destroy|terminate|revoke|cancel/i;
+  const SUBMENU_SEL =
+    'ul, ol, [role=menu], [role=group], [class*=submenu], [class*=sub-menu], ' +
+    '[class*=dropdown], [class*=Dropdown], [class*=children], [class*=nested], [class*=collapse]';
+  const isHidden = (el) => !el || el.offsetParent === null || el.getClientRects().length === 0;
+  const okText = (el) => {
+    const t = ((el.textContent || '').slice(0, 80) + ' ' + (el.getAttribute('aria-label') || '')).trim();
+    return t.length >= 2 && t.length <= 80 && !DANGER.test(t);
+  };
   const seen = new WeakSet();
+  let expanded = 0;
+  const tryClick = (el) => {
+    if (!el || seen.has(el) || expanded >= 40) return;
+    seen.add(el);
+    if (isHidden(el) || !okText(el)) return;
+    try { el.click(); expanded++; } catch {}
+  };
+
   for (const area of navAreas) {
-    if (expanded >= 15) break;
-    // Only toggles INSIDE recognised nav areas, and must be button-shaped
-    const toggles = area.querySelectorAll(
+    if (expanded >= 40) break;
+
+    // 1) Explicit ARIA toggles (original behaviour)
+    area.querySelectorAll(
       'button[aria-expanded="false"], [role=button][aria-expanded="false"], ' +
       'summary[aria-expanded="false"], [aria-expanded="false"][tabindex="0"]'
-    );
-    for (const el of toggles) {
-      if (seen.has(el)) continue;
-      seen.add(el);
-      if (!el.offsetParent) continue;
-      const text = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
-      if (text.length < 2 || text.length > 80) continue;
-      // Block destructive / dangerous actions
-      if (/logout|sign.?out|delete|remove|disconnect|danger|destroy|terminate|revoke|cancel/i.test(text)) continue;
-      try { el.click(); expanded++; } catch {}
-      if (expanded >= 15) break;
+    ).forEach(tryClick);
+
+    // 2) Non-ARIA dropdown parents: any element whose child submenu is hidden.
+    //    The clickable "header" is the parent's own anchor/button/label that sits
+    //    BEFORE the submenu — click that, not the submenu container.
+    for (const sub of area.querySelectorAll(SUBMENU_SEL)) {
+      if (expanded >= 40) break;
+      if (!isHidden(sub)) continue;                 // submenu already open
+      const parent = sub.parentElement;
+      if (!parent) continue;
+      let header =
+        parent.querySelector(':scope > a, :scope > button, :scope > [role=button], :scope > [role=menuitem]') ||
+        sub.previousElementSibling ||
+        parent;
+      if (header && header.contains(sub)) header = sub.previousElementSibling || parent;
+      tryClick(header);
     }
   }
   return { expanded };
@@ -495,6 +553,7 @@ Write to `{project-root}/.tmp/qa-<run-id>/routes.json`:
     "viaRouterAttrs": 0,
     "viaIntercept": 6,
     "viaNavClick": 5,
+    "viaNavReconcile": 0,
     "viaBundle": 9,
     "viaCommandPalette": 0,
     "viaServiceWorker": 0,
@@ -545,7 +604,9 @@ Field meanings:
 | Max SW cache entries harvested | 100 |
 | Max command palette items | 10 |
 | Max nav-click items in strategy d | 20 |
-| Max nav-expand toggles clicked | 15 |
+| Max nav-expand toggles clicked (per call) | 40 |
+| Max sidebar expand rounds (iterative) | 3 (Pass 2) / 4 (Pass 5) |
+| Max sidebar reconcile-clicks (Pass 5) | 30 |
 | Max hover-menu reveals per pass | 6 |
 | Max tab candidates per route | 12 |
 | Max CTA buttons per route | 4 |

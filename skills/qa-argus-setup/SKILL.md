@@ -55,7 +55,7 @@ Initialize Argus QA for your project. Run once per project:
      "mcpServers": {
        "playwright": {
          "command": "npx",
-         "args": ["@playwright/mcp@latest", "--headless=false"]
+         "args": ["@playwright/mcp@latest", "--isolated"]
        }
      }
    }

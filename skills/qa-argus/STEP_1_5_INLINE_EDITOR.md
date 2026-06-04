@@ -54,7 +54,7 @@ Dry run [true]:
 
 ## After All 5 Settings
 
-1. If user selected custom workers number → re-calculate: `workers = browsers.length × 4` (unless they entered custom)
+1. If user selected custom workers number → re-calculate: `workers = browsers.length × viewports.length` (one browser per engine × viewport; unless they entered custom)
 2. Re-print Step 1.5 confirmation screen with updated values
 3. Show [Y] [N] menu again
 

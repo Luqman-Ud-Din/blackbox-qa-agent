@@ -209,10 +209,10 @@ $mcpJsonSrc   = Join-Path $pluginSrc ".mcp.json"
 $mcpConfig    = @'
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest", "--headless=false"]
-    }
+    "playwright":         { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
+    "pw-chromium-mobile": { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
+    "pw-chromium-tablet": { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
+    "pw-chromium-laptop": { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] }
   }
 }
 '@

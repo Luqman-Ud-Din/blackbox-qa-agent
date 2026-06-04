@@ -173,11 +173,11 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
 - **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
-- **Detection (36):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
+- **Detection (39):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 67 skills**
+- **Total: 70 skills**
 
 ---
 
@@ -325,15 +325,15 @@ Export as env var: `BROWSERS=chromium,firefox,webkit`
 
 #### Worker Count Derivation
 
-Workers are derived automatically from the number of resolved browsers. Never hardcode `workers: 1`.
+Workers = total dedicated browser windows = **one per (engine × viewport)** = `browsers.length × viewports.length`. Each worker is an engine-pinned MCP browser resized to its viewport (Step 5.0). Never hardcode `workers: 1`.
 
-| Browsers | workers |
-|----------|---------|
-| 1 browser | 4 |
-| 2 browsers | 8 |
-| 3 browsers | 12 |
+| Browsers selected | Viewports | Workers (browser windows) |
+|---|---|---|
+| chromium | 4 (mobile/tablet/laptop/desktop) | **4** |
+| chromium + webkit | 4 | **8** |
+| chromium + firefox + webkit | 4 | **12** |
 
-**Rule:** `workers = browsers.length * 4`
+**Rule:** `workers = browsers.length × viewports.length`. Actual parallelism is capped by how many (engine × viewport) servers connected (Step 5.0 `activeWorkers`); `qa-preflight` generates `.mcp.json` to match your selection so they line up.
 
 Export as env var: `WORKERS=<derived value>`
 
@@ -435,7 +435,7 @@ Headless  [{current}] �  true / false:
 Dry run   [{current}] �  true / false: 
 ```
 
-After all 5 inputs: re-derive `workers = browsers.length * 4` unless user entered a custom number. Then re-print the confirmation screen.
+After all 5 inputs: re-derive `workers = browsers.length × viewports.length` (one browser per engine × viewport) unless user entered a custom number. Then re-print the confirmation screen.
 
 ---
 
@@ -755,12 +755,42 @@ At the start of Step 5, read `customize.toml -> [resilience]` and apply on every
 
 ### Step 5.0 — Cell sharding (DYNAMIC parallelism, honors resolvedConfig.workers)
 
-🚨 **CRITICAL: read `resolvedConfig.workers` at runtime — do NOT hardcode.** This value comes from the user's settings (`workers = browsers.length × 4` by default, but the user can override). Changing it from 4 → 8 → 12 in the config MUST change the actual parallel-worker count on the next audit. Never read a stale or memoized value.
+🚨 **CRITICAL: read `resolvedConfig.workers` at runtime — do NOT hardcode.** This value is `browsers.length × viewports.length` (one browser per engine × viewport), capped by how many (engine × viewport) MCP servers connected (Step 5.0 `activeWorkers`). Changing browsers or viewports MUST change the real parallel-worker count next run. Never read a stale or memoized value.
 
 ```
 workers = resolvedConfig.workers          // 4, 8, 12, etc — whatever the user set
 totalCells = audit-plan.cells.length
 ```
+
+**MCP server pool — ONE BROWSER PER (ENGINE × VIEWPORT) (2026-06-04).**
+
+The parallelism dimension is the **viewport**. Each (engine × viewportClass) gets its OWN visible browser window of the correct engine, resized to that viewport, auditing every route at that combination. So **selection drives the count**:
+- `chromium` only → **4 browsers** (mobile, tablet, laptop, desktop — all chromium)
+- `chromium + webkit` → **8** (4 + 4)
+- `chromium + firefox + webkit` → **12** (4 each)
+
+```
+viewportClasses = resolvedConfig.viewports.map(v => v.class)     // e.g. [mobile, tablet, laptop, desktop]
+
+// serverFor(engine, vpClass): the .mcp.json server name for this combination.
+// "playwright" is reserved as chromium-desktop AND the default server for route discovery / annotation / serial.
+serverFor = (engine, vp) => (engine === "chromium" && vp === "desktop") ? "playwright" : `pw-${engine}-${vp}`
+
+// Build one worker per (engine × viewport) whose server actually connected this session.
+workerList = []
+for engine in resolvedConfig.browsers:
+  for vp in viewportClasses:
+    const server = serverFor(engine, vp)
+    if (mcp__{server}__browser_navigate is registered)
+      workerList.push({ serverName: server, engine, viewportClass: vp,
+                        viewport: resolvedConfig.viewports.find(v => v.class === vp) })
+activeWorkers = workerList.length        // = browsers × viewports when all servers connected
+```
+
+- **Each worker owns ONE (engine × viewport)** — it uses ONLY `mcp__{serverName}__*`, `browser_resize`s its browser to `{viewport.width, viewport.height}` once at start, then audits every cell where `cell.browser === engine && cell.viewportClass === vp`. A firefox‑mobile cell runs in a real firefox browser sized to mobile — never a stand‑in.
+- **The `.mcp.json` is generated to match `browsers × viewports`** by `qa-preflight` (Check 1.5). The committed default is chromium × 4 viewports (4 servers). When you add firefox/webkit (or change viewports), preflight regenerates `.mcp.json` and asks you to restart — so the pool always equals your selection (no idle servers).
+- **A requested (engine × viewport) with no connected server is SURFACED, never silent:** LOG `⚠ {engine}×{vp} requested but its MCP browser isn't connected — run "npx playwright install {engine}" and restart.` and mark those cells `degraded` in the coverage ledger (Step 5.9).
+- **Fallback:** if only `playwright` connected (no restart yet), audit chromium cells by resizing that one browser per viewport (serial across viewports) and degrade the rest. Correctness preserved.
 
 **Branching rule (this is THE wire-up of the workers setting):**
 
@@ -775,46 +805,53 @@ Run the per-cell loop in this orchestrator's own thread. This is the documented 
 
 ### Step 5.1b — Parallel execution (workers >= 2, DEFAULT for MCP mode)
 
-**Sharding algorithm — split `audit-plan.cells` into `workers` chunks:**
+**Sharding — assign each worker the cells for ITS (engine × viewport):**
 
 ```
-chunks = []
-for (let i = 0; i < workers; i++) chunks[i] = []
-for (let i = 0; i < totalCells; i++) {
-  chunks[i % workers].push(audit-plan.cells[i])    // round-robin distribution
-}
-// Example: 144 cells / 4 workers = 4 chunks of 36 cells each
-//          144 cells / 8 workers = 8 chunks of 18 cells each
-//          144 cells / 12 workers = 12 chunks of 12 cells each
+// workerList was built in the server-pool block above (one per connected engine×viewport).
+for each w in workerList:
+  w.cells = audit-plan.cells.filter(c => c.browser === w.engine && c.viewportClass === w.viewportClass)
+// Each worker = all routes at one (engine, viewport). A firefox-mobile cell only ever runs in
+// the firefox browser sized to mobile. Browser AND viewport dimensions are both truthful.
+// Example: 3 engines × 4 viewports, 16 routes → 12 workers × ~16 cells each.
 ```
 
-Round-robin balances per-route/per-browser cell complexity across workers (vs sequential which would put all of browser-1's cells on worker-0).
+**Parallel dispatch — one Agent call per worker, in ONE message:**
 
-**Parallel dispatch — emit N Agent calls in ONE message:**
-
-The orchestrator emits exactly `workers` Agent tool calls in a SINGLE assistant message. Claude's harness executes them concurrently. Each Agent gets its own conversation context and its own MCP RPC channel.
+The orchestrator emits exactly `workerList.length` Agent calls in a SINGLE assistant message. Each Agent gets its own conversation context AND its own engine-pinned MCP server (= its own browser window of the correct engine).
 
 ```
-// IN ONE MESSAGE — multiple Agent tool calls:
-for (let i = 0; i < workers; i++) {
+// IN ONE MESSAGE — one Agent tool call per worker:
+for (let i = 0; i < workerList.length; i++) {
+  const { serverName, engine, viewportClass, viewport, cells } = workerList[i];
   Agent({
     subagent_type: "qa-cell-worker",
-    description: `Worker ${i+1}/${workers}: ${chunks[i].length} cells`,
-    prompt: `You are worker ${i} of ${workers}.
+    description: `Worker ${i+1}/${workerList.length} ${engine}×${viewportClass} on ${serverName}: ${cells.length} cells`,
+    prompt: `You are worker ${i} of ${workerList.length}, testing ${engine} at the ${viewportClass} viewport (${viewport.width}×${viewport.height}).
+FIRST call mcp__${serverName}__browser_resize(${viewport.width}, ${viewport.height}) — your browser stays this size for all your cells.
 
-Your assigned cells (process sequentially within your tab):
-${JSON.stringify(chunks[i])}
+🚨 YOUR DEDICATED MCP SERVER: "${serverName}"
+Every browser tool you call MUST be prefixed mcp__${serverName}__ — e.g.
+  mcp__${serverName}__browser_navigate, mcp__${serverName}__browser_evaluate,
+  mcp__${serverName}__browser_take_screenshot, mcp__${serverName}__browser_click.
+This is YOUR OWN browser window. NEVER call another server's tools. NEVER call the bare
+'playwright' tools unless "${serverName}" === "playwright". Do NOT open extra tabs — use your browser's default page.
+
+Your browser is ISOLATED (no shared cookies), so you MUST log in yourself before auditing.
+
+Your assigned cells (all ${engine}, process sequentially in your own browser):
+${JSON.stringify(cells)}
 
 Run context:
   runId:          "${runId}"
   baseUrl:        "${resolvedConfig.baseUrl}"
+  email:          "${email}"        password: (provided securely; mask in all output)
   resolvedConfig: <full config including resilience, content, viewports, browsers>
 
 Follow qa-cell-worker/SKILL.md exactly:
-  1. browser_tabs({ action: "new" }) — acquire your own tab
-  2. For each cell: select tab, navigate, evaluate probes, screenshot, annotate, write JSONL
-  3. browser_tabs({ action: "close", tabId }) — release tab
-  4. Return summary { workerIndex, cellsProcessed, cellsSkipped, cellsTimedOut, findingsTotal }`
+  1. Log in on YOUR server: mcp__${serverName}__browser_navigate(loginPath) → fill email+password → submit → wait.
+  2. For each cell: navigate, run the cell's applicableSkills (from the coverage ledger), screenshot to the ABSOLUTE .tmp/{runId}/screenshots/{cell.id}-base.png path, write findings JSONL + ledger marks, annotate.
+  3. Return summary { workerIndex, serverName, cellsProcessed, cellsSkipped, cellsTimedOut, findingsTotal }`
   })
 }
 ```
@@ -948,10 +985,17 @@ For each cell (route � viewport � browser):
        Sonnet (using Agent tool with subagent_type=qa-{skill-name}, 
        model=sonnet). The subagent receives skill SKILL.md + cell context
        and returns findings.
-  g. Interactive skills (auth-flow, cases, data-controls, widgets, etc.):
-       The orchestrator follows the skill's "Orchestrator flow" section,
-       calling browser_click / browser_type / browser_wait_for as needed,
-       then evaluating probes to check the resulting state.
+  g. Interactive skills (form-validation, data-controls, navigation, widgets, states, etc.) — **ACTIVE PHASES ARE MANDATORY, not optional.**
+
+       🚨 These skills are the ONLY source of the production-grade findings (form validation, filter/sort/pagination, tab switching, empty/error states). They are NOT passive probes — they require a SEQUENCE of MCP tool calls. You MUST NOT fold them into the Haiku `browser_evaluate` batch (step e) and call it done — that runs only their passive phase and silently drops every active test (the historical "only cosmetic findings, no form/pagination bugs" failure).
+
+       For EACH interactive skill in `interactiveSkills`:
+       1. Check the skill's **Self-skip** preconditions via a quick `browser_evaluate`. If preconditions are absent (e.g. no `<form>`, no table/search/pager) → ledger mark `skipped` with the concrete reason. This is the ONLY valid skip.
+       2. If preconditions ARE present → you MUST drive the skill's "Orchestrator flow" / "Tests" section as a real sequence: `browser_type` / `browser_click` / `browser_wait_for` between `browser_evaluate` reads. Default model = Haiku (the asserts are deterministic comparisons). When a check returns `uncertain: true`, escalate THAT check to `escalation_model` (Sonnet) per Step 5.5 — do NOT route the whole skill to Sonnet.
+       3. Emit the skill's findings AND a ledger mark carrying interaction evidence:
+          `{ ..., "status":"done|clean", "interacted": true, "evidence": "<before/after counts or text, e.g. rowsBefore=12 rowsAfter=12>" }`
+
+       **Forbidden:** marking an interactive skill `clean` (or `skipped`) on a page that DOES contain its target control without `interacted: true` + evidence. That is a passive-only run masquerading as a pass — Step 5.9 will flag it (see below).
   h. **Evidence capture — DETERMINISTIC, no code generation allowed.**
 
        🚨 **PRODUCTION RULE:** Do NOT compose chromium calls from the orchestrator. Do NOT write a per-cell .cjs that does annotation. The annotation pipeline is **MCP-driven** — two permanent Node scripts handle HTML generation + JSONL update, MCP renders. Zero local Playwright dependency, works on every plugin install.
@@ -1278,6 +1322,7 @@ All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
 
 1. Read `{project-root}/.tmp/{runId}/coverage-ledger.jsonl`.
 2. Find every line still `status:"expected"` → these are SILENT SKIPS: a (cell × skill) pair that was planned but never ran (this is exactly what dropped tablet + ~48 skills in run-audit1).
+2b. **Interactive-skill evidence check** (restores form/pagination/filter/tab findings). For every interactive skill (`qa-form-validation`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states`, `qa-form-flow`) marked `clean` or `skipped`: a `skipped` mark MUST carry a precondition-absent reason (no form / no table / no tabs). A `clean` mark on a cell whose page DOES contain the skill's target control REQUIRES `interacted: true` + `evidence`. An interactive `clean`/`skipped` mark WITHOUT evidence on a control-bearing page = a PASSIVE-ONLY run (the active tests never fired) → treat it exactly like an `expected` line: re-dispatch that skill on that cell to drive its active phases (step 5.4g), bounded by `coverage_max_retries`. Log: `🧪 Interactive evidence: {ok} verified, {reRun} re-run for passive-only, {n} skills`.
 3. For every cell that has any non-`expected` line, confirm `{project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png` exists. A missing base PNG = that cell needs a re-run (its screenshot landed in the wrong place — see Step 5.4h).
 4. If any `expected` lines OR missing base screenshots remain:
    - **retries so far < `customize.toml [resilience] coverage_max_retries` (default 2)?**
@@ -1292,7 +1337,29 @@ All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
       Re-running     : {rerunCount}
       Degraded       : {degradedCount}  → {cellId:skill — reason, ...}
    ```
-6. The audit may proceed to Step 6/7 ONLY when EVERY ledger line is in a terminal state (`done` | `clean` | `skipped` | `error` | `degraded`) and NO `expected`/blank lines remain. If `expected` lines still remain after the retry cap (should not happen — they should become `degraded`), the run is INCOMPLETE: say so loudly and do NOT report success.
+6. **ANNOTATION ENFORCEMENT (part of THIS gate — annotated screenshots are a plugin promise, and the inline Step 5.4 h.3 is routinely skipped).** This is the ONLY place annotation is guaranteed. For every `issues/cell-*.jsonl` that has at least one real finding (ignore `_coverage` lines), run the 3-step pipeline NOW:
+   ```
+   for each cell-*.jsonl with findings:
+     a. node "{project-root}/scripts/annotate-cell-prepare.cjs" "{runId}" "{cellId}"
+        • exit 5 → no findings → skip cell
+        • exit 2 → base PNG missing → re-take this cell's base screenshot first, then retry (a)
+        • exit 0 → parse stdout JSON → { fileUrl, expectedAnnotatedPath }
+     b. browser_navigate(url = fileUrl, waitUntil = "load")
+        browser_take_screenshot(filename = "<same screenshots dir that holds {cellId}-base.png>/{cellId}-annotated.png", fullPage = true)
+        ← MUST land next to the base PNG in .tmp/{runId}/screenshots/. Use the IDENTICAL path form you used for the base screenshot (that location is confirmed writable). A bare name lands in .playwright-mcp/ and finalize won't find it.
+     c. node "{project-root}/scripts/annotate-cell-finalize.cjs" "{runId}" "{cellId}"
+        • exit 0 → annotatedScreenshotPath written into every finding of the cell
+        • exit 2 → annotated PNG not found → the screenshot in (b) landed in the wrong dir → redo (b) with the correct path
+   ```
+   Then RE-SCAN every finding: each must have a non-empty `annotatedScreenshotPath` whose file exists. Any finding still missing it after one retry → set `screenshotSkipReason` (e.g. `"annotated render failed"`) so file-bugs falls back to base KNOWINGLY, and log it. Emit:
+   ```
+   🖼️  Annotation gate
+      Findings         : {findingsTotal}
+      Annotated        : {annotatedCount}
+      Fallback to base : {fallbackCount}  → {cellIds + reason}
+   ```
+   **Hard stop:** if `annotatedCount === 0` while `findingsTotal > 0`, the annotation pipeline was bypassed entirely (this run's exact failure) — re-run sub-step 6 from the top; do NOT proceed to bug filing with zero annotations.
+7. The audit may proceed to Step 6/7 (vision + bug filing) ONLY when BOTH hold: (a) EVERY ledger line is terminal (`done`|`clean`|`skipped`|`error`|`degraded`) with no `expected` left, AND (b) the annotation gate ran and every finding has `annotatedScreenshotPath` OR an explicit logged `screenshotSkipReason`. A run with `expected` lines, or with findings that have neither an annotated path nor a skip reason, is INCOMPLETE: say so loudly and do NOT report success.
 
 The final coverage report (Step 8) MUST list every `degraded` pair with its reason, and MUST state the real coverage (`accounted/expected`) — never present a partial run as complete (the run-audit1 report claimed "done" at ~1/60 cells; that is now forbidden).
 
