@@ -16,7 +16,7 @@ replaces:
 
 Single skill owning structural form HTML and physical input dimensions. Separates from accessibility (qa-form-a11y) and content (qa-form-validation). Pure passive — no interaction.
 
-## What it checks (3 issue types)
+## What it checks (4 issue types)
 
 | issueType | severity | catches |
 |---|---|---|
@@ -24,6 +24,7 @@ Single skill owning structural form HTML and physical input dimensions. Separate
 | `formNoSubmit` | medium | Form has no visible submit button (no `button[type="submit"]`, `input[type="submit"]`, or `button:not([type])`) |
 | `inputHeightTooSmall` | medium | On mobile/tablet (vw ≤ 1024), input rendered height < 44px (below touch-target minimum) |
 | `formFieldNotFullWidth` | medium | On mobile (vw ≤ 768), form input rendered < 70% of parent width AND < 300px wide |
+| `nativeSelectHidden` | medium | Native `<select>` is CSS-hidden on mobile and replaced by a custom component without `aria-expanded`/`aria-haspopup` — may not trigger native OS picker and may be inaccessible |
 
 ## Self-skip
 Return `[]` ONLY if there are **no visible testable inputs** (text/email/password/number/tel/url/search/date/textarea/select). **Do NOT skip on a missing `<form>`** — form-less input groups still get the touch-target/full-width checks AND get flagged as `inputsNotWrappedInForm` below.
@@ -96,6 +97,29 @@ Return `[]` ONLY if there are **no visible testable inputs** (text/email/passwor
               bbox: bb(el) });
           }
         }
+      }
+    }
+  }
+
+
+  // 4. nativeSelectHidden — native <select> CSS-hidden, replaced by custom component without ARIA (mobile/tablet)
+  if (isMobile || isMobileOrTablet) {
+    for (const select of document.querySelectorAll('select')) {
+      if (out.length >= 24) break;
+      const s = getComputedStyle(select);
+      const r = select.getBoundingClientRect();
+      const isHidden = s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0 || r.width === 0;
+      if (!isHidden) continue; // native select visible — fine
+      const parent = select.parentElement;
+      if (!parent) continue;
+      const customDropdown = parent.querySelector('[role="combobox"],[role="listbox"],[class*="select"],[class*="dropdown"],[class*="combo"]');
+      if (!customDropdown) continue;
+      const hasAria = customDropdown.hasAttribute('aria-expanded') || customDropdown.hasAttribute('aria-haspopup');
+      if (!hasAria) {
+        const sel = select.id ? `#${select.id}` : (select.name ? `select[name="${select.name}"]` : 'select');
+        out.push({ issueType: 'nativeSelectHidden', severity: 'medium', selector: sel,
+          description: `Native <select> is hidden on mobile and replaced by a custom component (${customDropdown.className || customDropdown.tagName}) without aria-expanded/aria-haspopup — mobile users won't get the native OS picker and screen readers may not work`,
+          bbox: bb(parent) });
       }
     }
   }

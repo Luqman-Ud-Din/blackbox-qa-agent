@@ -1,6 +1,6 @@
 ---
 name: qa-detect-images
-description: "Detects missing alt text, broken images, oversized images, and aspect-ratio distortion (stretched)"
+description: "Detects missing alt text, broken images, oversized images, aspect-ratio distortion (stretched), and hero/banner images without object-fit:cover"
 model: haiku
 applyOn: all
 needsSetup: false
@@ -11,7 +11,8 @@ viewportSensitive: false
 - Missing alt attribute (absent, not empty)
 - Failed loads (broken image)
 - Images rendered at <1/3 natural size (oversized download for tiny render)
-- **Images stretched: rendered aspect ratio differs from natural aspect ratio by >20%**
+- Images stretched: rendered aspect ratio differs from natural aspect ratio by >20%
+- Hero/banner images without `object-fit: cover` — renders as distorted fill or letterboxed contain
 
 ## Probe (browser_evaluate)
 ```js
@@ -57,6 +58,63 @@ viewportSensitive: false
         description:`Aspect ratio distorted: natural ${img.naturalWidth}×${img.naturalHeight} (${naturalRatio.toFixed(2)}:1) rendered at ${Math.round(r.width)}×${Math.round(r.height)} (${renderedRatio.toFixed(2)}:1) — ${pctOff}% off`, bbox: bb(img) });
     }
   }
+
+    // 6. CSS background-image hero sections — background-size not cover
+    const heroContainerSelectors = [
+      '[class*="hero"]','[class*="banner"]','[class*="jumbotron"]','[class*="masthead"]',
+      '[class*="splash"]','header[class*="bg"]','section[class*="cover"]'
+    ];
+    const seenBgEls = new Set();
+    for (const hSel of heroContainerSelectors) {
+      for (const el of document.querySelectorAll(hSel)) {
+        if (out.length >= 20 || seenBgEls.has(el)) break;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height < 150) continue;
+        const s = getComputedStyle(el);
+        const bgImage = s.backgroundImage;
+        if (!bgImage || bgImage === 'none' || !bgImage.startsWith('url')) continue;
+        seenBgEls.add(el);
+        const bgSize = s.backgroundSize;
+        if (bgSize === 'cover') continue; // correct
+        const selector = `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : (el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : '')}`.slice(0, 120);
+        out.push({ issueType: 'heroBackgroundNoCover', severity: 'medium', selector,
+          description: `Hero/banner section (${Math.round(r.width)}×${Math.round(r.height)}px) has background-image with background-size:${bgSize || 'auto'} — use background-size:cover to prevent letterboxing or distortion on different screen sizes`,
+          bbox: bb(el) });
+      }
+    }
+
+    // 5. Hero image object-fit — large/banner images without object-fit:cover
+    const heroImgs = new Set();
+    const heroSelectors = [
+      '[class*="hero"] img', '[class*="banner"] img', '[class*="jumbotron"] img',
+      '[class*="cover"] img', 'header img', '[class*="masthead"] img', '[class*="splash"] img'
+    ];
+    for (const hSel of heroSelectors) {
+      for (const hImg of document.querySelectorAll(hSel)) heroImgs.add(hImg);
+    }
+    // Also treat any large image (≥60% viewport width AND ≥200px tall) as hero
+    for (const img of document.querySelectorAll('img')) {
+      const r = img.getBoundingClientRect();
+      if (r.width >= innerWidth * 0.6 && r.height >= 200) heroImgs.add(img);
+    }
+    for (const img of heroImgs) {
+      if (out.length >= 20) break;
+      if (img.complete && img.naturalWidth === 0) continue; // already caught as broken
+      const r = img.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const s = getComputedStyle(img);
+      const objectFit = s.objectFit || 'fill';
+      const src = (img.src || '').slice(0, 100);
+      const heroSel = `img[src="${src.slice(0, 60)}"]`;
+      if (objectFit === 'fill' || objectFit === 'none') {
+        out.push({ issueType: 'heroImageNoCover', severity: 'medium', selector: heroSel,
+          description: `Hero/banner image (${Math.round(r.width)}×${Math.round(r.height)}px) uses object-fit:${objectFit} — will distort on different aspect-ratio screens. Use object-fit:cover.`, bbox: bb(img) });
+      } else if (objectFit === 'contain') {
+        out.push({ issueType: 'heroImageLetterboxed', severity: 'low', selector: heroSel,
+          description: `Hero/banner image (${Math.round(r.width)}×${Math.round(r.height)}px) uses object-fit:contain — may show empty letterbox bars on different screens. Consider object-fit:cover with object-position.`, bbox: bb(img) });
+      }
+    }
+
   return out;
 }
 ```
@@ -68,6 +126,9 @@ viewportSensitive: false
 | brokenImage | critical | "Image failed to load: {src}" |
 | oversizedImage | low | "Natural size {nw}×{nh}px rendered at {rw}×{rh}px ({ratio}x oversized)" |
 | imageStretched | medium | "Aspect ratio distorted: natural {nw}×{nh} ({nr}:1) rendered at {rw}×{rh} ({rr}:1) — {pct}% off" |
+| heroImageNoCover | medium | "Hero/banner image uses object-fit:{fill|none} — will distort on different aspect-ratio screens" |
+| heroImageLetterboxed | low | "Hero/banner image uses object-fit:contain — may show empty letterbox bars on different screens" |
+| heroBackgroundNoCover | medium | "Hero/banner section has background-image with background-size:{size} — use background-size:cover" |
 
 ## Threshold note
 The 20% threshold balances catching genuine distortion (logos squashed, photos stretched) against allowing minor variations from `object-fit: cover` cropping. Increase to 30% if false positives appear on photos with intentional cropping; decrease to 10% for strict design QA.

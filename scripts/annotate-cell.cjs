@@ -21,21 +21,13 @@ const zlib = require('zlib');
 const schema = require('./argus-schema.cjs');
 
 const RUN_ID = process.argv[2];
-const CELL_ID = process.argv[3];
-if (!RUN_ID || !CELL_ID) { console.error('Usage: node scripts/annotate-cell.cjs <run-id> <cell-id>'); process.exit(1); }
+const CELL_ID = process.argv[3]; // optional — OMIT to annotate EVERY cell in the run (whole-run mode)
+if (!RUN_ID) { console.error('Usage: node scripts/annotate-cell.cjs <run-id> [cell-id]   (omit cell-id to annotate the whole run in one pass)'); process.exit(1); }
 
 const PROJECT_ROOT  = path.resolve(__dirname, '..');
 const RUN_DIR       = path.join(PROJECT_ROOT, '.tmp', RUN_ID);
-const ISSUES_FILE   = path.join(RUN_DIR, 'issues', `${CELL_ID}.jsonl`);
+const ISSUES_DIR    = path.join(RUN_DIR, 'issues');
 const SHOTS_DIR     = path.join(RUN_DIR, 'screenshots');
-const BASE_PNG      = path.join(SHOTS_DIR, `${CELL_ID}-base.png`);
-
-if (!fs.existsSync(BASE_PNG))    { console.error(`annotate-cell: base PNG missing ${BASE_PNG}`); process.exit(2); }
-if (!fs.existsSync(ISSUES_FILE)) { console.error(`annotate-cell: JSONL missing ${ISSUES_FILE}`); process.exit(3); }
-
-const rawIssues = schema.readJsonl(ISSUES_FILE);
-const findings = rawIssues.filter(i => i && i.issueType !== '_coverage');
-if (findings.length === 0) { console.log(`annotate-cell: ${CELL_ID} no findings — skip`); process.exit(5); }
 
 const COLORS = { critical: [185,28,28], high: [239,68,68], medium: [249,115,22], low: [59,130,246] };
 
@@ -104,40 +96,79 @@ function drawBox(img, bb, col, thickness) {
   }
 }
 
-try {
-  const base = decodePNG(fs.readFileSync(BASE_PNG)); // decode ONCE
-  const relBase = path.relative(PROJECT_ROOT, BASE_PNG).split(path.sep).join('/');
-  const T = 4;
+// ── Annotate ONE cell. Returns a status object; never throws. ────────────────
+function annotateCell(cellId) {
+  const ISSUES_FILE = path.join(ISSUES_DIR, `${cellId}.jsonl`);
+  const BASE_PNG    = path.join(SHOTS_DIR, `${cellId}-base.png`);
+  if (!fs.existsSync(ISSUES_FILE)) return { cellId, status: 'no-jsonl' };
+  const rawIssues = schema.readJsonl(ISSUES_FILE);
+  const findings  = rawIssues.filter(i => i && i.issueType !== '_coverage');
+  if (findings.length === 0)       return { cellId, status: 'no-findings' };
+  if (!fs.existsSync(BASE_PNG))    return { cellId, status: 'no-base', findings: findings.length };
+  try {
+    const base = decodePNG(fs.readFileSync(BASE_PNG)); // decode ONCE
+    const relBase = path.relative(PROJECT_ROOT, BASE_PNG).split(path.sep).join('/');
+    const T = 4;
 
-  // Walk every issue line; each finding gets its OWN annotated screenshot.
-  let issueIdx = 0, drawn = 0;
-  const updated = rawIssues.map(i => {
-    if (!i || i.issueType === '_coverage') return i;
-    issueIdx++;
-    const out = { ...i, screenshotPath: i.screenshotPath || relBase };
-    const bb = i.bbox;
-    if (bb && typeof bb.x === 'number') {
-      // fresh copy of the base pixels, draw ONLY this finding's box
-      const img = { ...base, raw: Buffer.from(base.raw) };
-      drawBox(img, bb, COLORS[i.severity] || COLORS.medium, T);
-      const outPath = path.join(SHOTS_DIR, `${CELL_ID}-issue-${issueIdx}-annotated.png`);
-      fs.writeFileSync(outPath, encodePNG(img));
-      out.annotatedScreenshotPath = path.relative(PROJECT_ROOT, outPath).split(path.sep).join('/');
-      drawn++;
-    } else {
-      // page-level finding (no bbox) → nothing to highlight; keep the base shot
-      out.annotatedScreenshotPath = relBase;
-    }
-    return out;
-  });
+    // Walk every issue line; each finding gets its OWN annotated screenshot.
+    let issueIdx = 0, drawn = 0;
+    const updated = rawIssues.map(i => {
+      if (!i || i.issueType === '_coverage') return i;
+      issueIdx++;
+      const out = { ...i, screenshotPath: i.screenshotPath || relBase };
+      const bb = i.bbox;
+      if (bb && typeof bb.x === 'number') {
+        // fresh copy of the base pixels, draw ONLY this finding's box
+        const img = { ...base, raw: Buffer.from(base.raw) };
+        drawBox(img, bb, COLORS[i.severity] || COLORS.medium, T);
+        const outPath = path.join(SHOTS_DIR, `${cellId}-issue-${issueIdx}-annotated.png`);
+        fs.writeFileSync(outPath, encodePNG(img));
+        out.annotatedScreenshotPath = path.relative(PROJECT_ROOT, outPath).split(path.sep).join('/');
+        drawn++;
+      } else {
+        // page-level finding (no bbox) → nothing to highlight; keep the base shot
+        out.annotatedScreenshotPath = relBase;
+      }
+      return out;
+    });
 
-  const tmp = ISSUES_FILE + '.tmp';
-  fs.writeFileSync(tmp, updated.map(i => JSON.stringify(i)).join('\n') + '\n');
-  fs.renameSync(tmp, ISSUES_FILE);
-
-  console.log(`annotate-cell: ${CELL_ID} → ${drawn} per-issue annotated screenshots (${findings.length} findings)`);
-  process.exit(0);
-} catch (e) {
-  console.error(`annotate-cell: ${CELL_ID} failed (${e.message}) — leaving base unannotated`);
-  process.exit(0); // never block the run
+    const tmp = ISSUES_FILE + '.tmp';
+    fs.writeFileSync(tmp, updated.map(i => JSON.stringify(i)).join('\n') + '\n');
+    fs.renameSync(tmp, ISSUES_FILE);
+    return { cellId, status: 'ok', drawn, findings: findings.length };
+  } catch (e) {
+    return { cellId, status: 'error', error: e.message };
+  }
 }
+
+// ── Dispatch: ONE cell (back-compat) OR the WHOLE run (no cell-id). ───────────
+// Whole-run mode collapses N per-cell orchestrator calls into ONE deterministic
+// command, so annotation can NEVER be partially skipped — there is nothing
+// per-cell for the model to drop.
+if (CELL_ID) {
+  const r = annotateCell(CELL_ID);
+  if (r.status === 'ok')            { console.log(`annotate-cell: ${CELL_ID} → ${r.drawn} per-issue annotated screenshots (${r.findings} findings)`); process.exit(0); }
+  if (r.status === 'no-findings')   { console.log(`annotate-cell: ${CELL_ID} no findings — skip`); process.exit(5); }
+  if (r.status === 'no-base')       { console.error(`annotate-cell: base PNG missing for ${CELL_ID}`); process.exit(2); }
+  if (r.status === 'no-jsonl')      { console.error(`annotate-cell: JSONL missing for ${CELL_ID}`); process.exit(3); }
+  console.error(`annotate-cell: ${CELL_ID} failed (${r.error}) — leaving base unannotated`); process.exit(0);
+}
+
+// Whole-run mode — annotate every cell-*.jsonl in one process.
+if (!fs.existsSync(ISSUES_DIR)) { console.error(`annotate-cell: no issues dir ${ISSUES_DIR}`); process.exit(3); }
+const cellIds = fs.readdirSync(ISSUES_DIR)
+  .filter(f => /^cell-.*\.jsonl$/.test(f))
+  .map(f => f.replace(/\.jsonl$/, ''));
+let ok = 0, drawnTotal = 0, noFind = 0; const noBase = [], errors = [];
+for (const cid of cellIds) {
+  const r = annotateCell(cid);
+  if (r.status === 'ok')              { ok++; drawnTotal += r.drawn; }
+  else if (r.status === 'no-base')    noBase.push(cid);
+  else if (r.status === 'error')      errors.push(`${cid}:${r.error}`);
+  else if (r.status === 'no-findings')noFind++;
+}
+console.log(`annotate-cell [whole-run ${RUN_ID}]: ${ok}/${cellIds.length} cells annotated, ${drawnTotal} boxes drawn, ${noFind} clean.`);
+if (noBase.length) console.log(`  ⚠ ${noBase.length} cell(s) have findings but NO base PNG (re-screenshot needed): ${noBase.join(', ')}`);
+if (errors.length) console.log(`  ⚠ ${errors.length} error(s): ${errors.join(' | ')}`);
+// Non-zero ONLY when a cell that HAS findings is missing its base PNG — the gate signal to re-screenshot.
+process.exit(noBase.length ? 2 : 0);

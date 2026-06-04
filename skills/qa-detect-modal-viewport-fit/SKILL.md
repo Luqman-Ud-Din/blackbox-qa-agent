@@ -30,6 +30,8 @@ This skill detects already-open modals OR finds a modal trigger and opens one, t
 4. Emit findings:
    - If `tooTall` AND `!hasInternalScroll` → `modalTooTallNoScroll` (high)
    - If `footerOffscreen` → `modalFooterUnreachable` (high)
+   - If `modalTooWideForViewport` → `modalTooWideForViewport` (medium)
+   - If `contentOverflowsModal` → `modalContentOverflows` (medium)
 5. If `openedHere` is true:
    - `browser_press_key('Escape')` — dismiss
    - `browser_wait_for(time=300)`
@@ -110,10 +112,25 @@ This skill detects already-open modals OR finds a modal trigger and opens one, t
     footerOffscreen = fr.bottom > vh + 2 || fr.top > vh;
   }
 
+  // Narrow-width reflow check
+  const modalStyle = getComputedStyle(modal);
+  const minWidth = parseFloat(modalStyle.minWidth) || 0;
+  const vwWidth = window.innerWidth;
+  const modalTooWideForViewport = minWidth > vwWidth * 0.95 && vwWidth < 480;
+
+  // Internal content overflow (fixed-width children inside modal)
+  let contentOverflowsModal = false;
+  const modalBody = modal.querySelector('[class*="modal-body"],[class*="dialog-body"],[class*="modal-content"] > div, [class*="dialog-content"] > div');
+  if (modalBody && modalBody.scrollWidth > modalBody.clientWidth + 10) {
+    contentOverflowsModal = true;
+  }
+
   return {
     tooTall: r.height > vh + 4,
     hasInternalScroll,
     footerOffscreen,
+    modalTooWideForViewport,
+    contentOverflowsModal,
     modalBbox: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
   };
 }
@@ -139,3 +156,5 @@ After step 5 (if dismissed), call `probe.cleanupModalFit`.
 |---|---|---|
 | modalTooTallNoScroll | high | "Modal height {h}px exceeds viewport {vh}px and has no internal scroll — content below the fold is unreachable" |
 | modalFooterUnreachable | high | "Modal action footer (Submit/Cancel buttons) is below the viewport — users cannot click them without scrolling outside the modal" |
+| modalTooWideForViewport | medium | "Modal has min-width:{minWidth}px which exceeds viewport width {vw}px — content will overflow or be clipped on mobile" |
+| modalContentOverflows | medium | "Modal body content overflows its container — internal content has fixed width wider than the modal itself" |

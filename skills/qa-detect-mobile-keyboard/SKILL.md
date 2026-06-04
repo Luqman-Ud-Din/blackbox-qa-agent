@@ -1,6 +1,6 @@
 ---
 name: qa-detect-mobile-keyboard
-description: "Detects layout that breaks when the on-screen keyboard appears: fixed bottom bars covering the focused input, no use of visualViewport API, no scroll-into-view on focus"
+description: "Detects layout that breaks when the on-screen keyboard appears AND inputs with wrong type/inputmode that show the wrong keyboard on mobile (QWERTY instead of numpad, etc.)"
 model: haiku
 applyOn: [mobile]
 needsSetup: false
@@ -10,13 +10,14 @@ interactive: true
 
 ## What it checks
 
-When a user taps a form field on mobile, the on-screen keyboard takes ~40% of the viewport. Common bugs:
-- A fixed bottom bar (action buttons, footer) still covers the input that the user is typing into
-- No `visualViewport` API usage — the page doesn't compensate for the keyboard
-- The focused input is below the keyboard zone (lower 40% of viewport) and the page doesn't scroll it into view
+- **Wrong mobile keyboard** — input fields whose label/name/placeholder implies a specific data type (phone, email, postal code, card number, amount) but lack the correct `type` or `inputmode` attribute. Users get QWERTY when they need a numpad.
+- **Input hidden by keyboard** — a fixed bottom bar covers the focused input when the on-screen keyboard appears
+- **No scroll-into-view** — focused input in the lower 40% of viewport and page doesn't scroll it up
+- **No visualViewport API** — page cannot dynamically respond to keyboard appearance
 
 ## Orchestrator flow
 
+0. Run `probe.checkInputMobileKeyboards` (passive) — emit `wrongMobileKeyboard` for each mismatched input. Does not interact with the page.
 1. Run `probe.findInputForKeyboardTest` — returns `{found, selector, initialPosition}`. If `found` is false → **self-skip**.
 2. `browser_click(selector=<input selector>)` — focus it (does not summon a real keyboard in headless, but triggers focus handlers)
 3. `browser_wait_for(time=400)` — allow any scroll-into-view JS to run
@@ -28,6 +29,49 @@ When a user taps a form field on mobile, the on-screen keyboard takes ~40% of th
 6. Run `probe.blurInput({selector})` — blur it to leave page clean.
 
 ## Probes (browser_evaluate)
+
+```js
+// probe.checkInputMobileKeyboards — passive scan, no interaction
+() => {
+  const out = [];
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const heuristics = [
+    { test: /phone|tel|mobile|cell|fax/i,              expectedType: 'tel',    expectedInputmode: 'tel',     label: 'phone number' },
+    { test: /email|e-mail/i,                            expectedType: 'email',  expectedInputmode: 'email',   label: 'email address' },
+    { test: /zip|postal|postcode/i,                     expectedType: 'text',   expectedInputmode: 'numeric', label: 'ZIP/postal code' },
+    { test: /card.?num|credit.?card|debit.?card/i,      expectedType: 'text',   expectedInputmode: 'numeric', label: 'card number' },
+    { test: /cvv|cvc|security.?code/i,                  expectedType: 'text',   expectedInputmode: 'numeric', label: 'CVV' },
+    { test: /\bamount\b|\bprice\b|\bcost\b|\bqty\b|\bquantity\b|\bage\b|\bpin\b/i, expectedType: 'number', expectedInputmode: 'numeric', label: 'numeric value' },
+    { test: /\bsearch\b/i,                              expectedType: 'search', expectedInputmode: 'search',  label: 'search field' },
+  ];
+  for (const input of document.querySelectorAll('input[type="text"], input:not([type])')) {
+    if (out.length >= 10) break;
+    const r = input.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0 || input.disabled || input.readOnly) continue;
+    const labelEl = input.labels && input.labels[0];
+    const labelText = (
+      (labelEl && (labelEl.innerText || labelEl.textContent)) ||
+      input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || ''
+    ).toLowerCase();
+    if (!labelText) continue;
+    const currentType = (input.type || 'text').toLowerCase();
+    const currentInputmode = (input.getAttribute('inputmode') || '').toLowerCase();
+    const sel = input.id ? `#${input.id}` : (input.name ? `[name="${input.name}"]` : 'input');
+    for (const h of heuristics) {
+      if (!h.test.test(labelText)) continue;
+      const typeOk = currentType === h.expectedType;
+      const modeOk = currentInputmode === h.expectedInputmode;
+      if (!typeOk && !modeOk) {
+        out.push({ issueType: 'wrongMobileKeyboard', severity: 'medium', selector: sel,
+          description: `"${labelText}" field uses type="${currentType}" without inputmode="${h.expectedInputmode}" — mobile users see QWERTY instead of the ${h.expectedInputmode} keyboard`,
+          bbox: bb(input) });
+      }
+      break;
+    }
+  }
+  return out;
+}
+```
 
 ```js
 // probe.findInputForKeyboardTest
@@ -119,6 +163,7 @@ The orchestrator compares `currentTop` to the `initialPosition.top` it captured 
 ## Issues
 | issueType | severity | description |
 |---|---|---|
+| wrongMobileKeyboard | medium | '"{label}" field uses type="{t}" without inputmode="{mode}" — mobile users see QWERTY instead of the correct keyboard' |
 | inputHiddenByBottomBar | high | "Focused input is overlapped by a fixed bottom bar — keyboard would cover even more of the input on real device" |
 | inputInKeyboardZoneNoScroll | medium | "Focused input sits in the lower 40% of the viewport and the page did not scroll it into view — on real device the keyboard hides it" |
 | noVisualViewportHandling | low | "Site does not appear to use the visualViewport API — cannot dynamically respond to keyboard appearance" |

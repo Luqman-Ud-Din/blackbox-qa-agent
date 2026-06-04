@@ -1240,23 +1240,23 @@ After Step 5.7 closes for the LAST cell, run the annotation sweep BEFORE Step 5.
 
 🚨 **DO NOT SKIP THIS STEP.** Annotation is a plugin promise — end users install this plugin expecting annotated screenshots in their ADO tickets. The inline call in Step 5.4(h.3) is best-effort; this sweep is the contract.
 
-**Algorithm — ONE deterministic script per cell (pure Node, no MCP).** For every `cell-*.jsonl` file in `{project-root}/.tmp/{runId}/issues/`:
+**Algorithm — ONE deterministic command for the ENTIRE run (pure Node, no MCP, NO per-cell model decisions).**
 
 ```
-list = glob "{project-root}/.tmp/{runId}/issues/cell-*.jsonl"
-
-for cellId in list:
-  result = Bash("node scripts/annotate-cell.cjs {runId} {cellId}")
-  # exit 0 = annotated PNG written + JSONL stamped;  2 = base PNG missing;  3 = JSONL missing;  5 = no findings (skip)
-  if result.exitCode not in (0, 5): log + continue
+Bash("node scripts/annotate-cell.cjs {runId}")     # ← NO cellId = WHOLE-RUN mode
 ```
-`annotate-cell.cjs` decodes the base PNG, draws the severity-colored bbox boxes directly onto it (zlib + pixel write), writes `{cellId}-annotated.png`, and stamps `annotatedScreenshotPath`. No browser, no MCP, no model — so it can never be silently skipped (the previous failure mode).
+
+That ONE command iterates every `cell-*.jsonl` in `{project-root}/.tmp/{runId}/issues/` itself, decodes each base PNG, draws the severity-colored bbox boxes (zlib + pixel write), writes `{cellId}-issue-{n}-annotated.png`, and stamps `annotatedScreenshotPath` into every finding. **Because it is ONE command that loops internally, there are no per-cell calls for the orchestrator to skip — this is precisely what fixes the historical "annotation never ran" failure (the old model-driven prepare → MCP-render → finalize pipeline was skipped per cell).** No browser, no MCP, no model in the loop.
+
+Exit codes (whole-run):
+- **0** — every cell with findings was annotated (or was clean). Done.
+- **2** — one or more cells have findings but are MISSING their base PNG. The command prints the exact ids: `⚠ N cell(s) have findings but NO base PNG ... : cell-001, ...`. For EACH listed cell: re-take its base screenshot to the ABSOLUTE path `{project-root}/.tmp/{runId}/screenshots/{cellId}-base.png` (navigate to that cell's route+viewport, `browser_take_screenshot(fullPage:true)`), then re-run `node scripts/annotate-cell.cjs {runId}` ONCE more. Bounded by `coverage_max_retries`.
+- **3** — no issues dir (nothing audited).
 
 Behavior:
-- **Idempotent:** re-running on a cell whose findings already have `annotatedScreenshotPath` is a no-op. Both prepare + finalize handle the case gracefully.
-- prepare exits: 0 = HTML written; 2 = base PNG missing; 3 = JSONL missing; 4 = schema fail; 5 = no findings (skip).
-- finalize exits: 0 = updated (or no-op); 2 = annotated PNG missing (MCP screenshot failed); 3 = JSONL missing; 4 = schema fail.
-- **Do not abort the sweep on a single cell failure.** Log the cellId + exit code and continue. The Step 7 validation gate surfaces any cell that still lacks annotations.
+- **Idempotent** — re-running stamps the same paths and overwrites the same PNGs; safe to run repeatedly.
+- **Single source of truth** — this REPLACES both the old per-cell sweep loop AND the old `annotate-cell-prepare.cjs` → MCP-render → `annotate-cell-finalize.cjs` 3-step pipeline. Do NOT call prepare/finalize; they are superseded by this one command.
+- **Exit 2 is a re-screenshot signal, not a failure.** Handle the listed cells and re-run. The Step 5.9 gate confirms every finding ends with a valid `annotatedScreenshotPath` whose file exists.
 
 Log per cell:
 ```

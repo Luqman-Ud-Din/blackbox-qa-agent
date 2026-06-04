@@ -69,7 +69,8 @@ These probes use `fetch()` inside the current page — no navigation required. T
 
 ### Pass 1 — Public routes (unauthenticated context)
 
-1. Already at `baseUrl + '/'` from Pass 0 (no fresh navigation needed unless Pass 0 wasn't run)
+1. Already at `baseUrl + '/'` from Pass 0. **Wait for the unauthenticated landing to FULLY render before harvesting.** SPA login pages inject their links (`Forgot Password`, `Sign up`) only after the JS boots — harvesting too early is why `viaAnchors` comes back `0` and the public routes are missed. Do: `browser_wait_for(time = 2500)`, then `browser_evaluate("return document.readyState")`; if it is not `"complete"`, `browser_wait_for(time = 1500)` once more.
+1a. **Discover the REAL login route — NEVER use a hardcoded/configured login path.** Logged out, the app redirects `/` to its true login URL. Capture it: `discoveredLoginPath = browser_evaluate("return location.pathname")` (e.g. the app may land on `/login`, `/signin`, `/auth/login` — whatever it ACTUALLY redirected to). Store `discoveredLoginPath` for Pass 2 and record it as `{ path, requiresAuth: false, source: 'loginRedirect' }`. This is what prevents the wrong pinned `/auth/login`: the login route is *observed*, not assumed. Fall back to the configured `loginPath` ONLY if `/` did not redirect (i.e. the landing IS the app, not a login screen).
 2. `browser_evaluate(probe.injectInterceptor)` — install history + hashchange tracker
 3. `browser_evaluate(probe.expandCollapsedNav)` — open every collapsed nav group (ARIA toggles *and* non-ARIA parents containing a hidden submenu). Repeat until it returns `expanded === 0` (max 3 rounds) to open nested levels
 4. `browser_evaluate(probe.scanNavItems)` returns up to 6 top-level nav-item texts. For each: `browser_hover(text)` then a 400ms wait — reveals hover-only mega menus
@@ -82,7 +83,7 @@ These probes use `fetch()` inside the current page — no navigation required. T
 
 ### Pass 2 — Auth-gated routes (authenticated context)
 
-1. `browser_navigate(baseUrl + loginPath)`
+1. `browser_navigate(baseUrl + (discoveredLoginPath || loginPath))` — **prefer the `discoveredLoginPath` observed in Pass 1 step 1a over any configured value.** If the configured `loginPath` differs from `discoveredLoginPath`, trust the discovered one and log `⚠ configured loginPath '{loginPath}' ≠ observed '{discoveredLoginPath}' — using observed` (a wrong configured path is the exact cause of the `"pinned": "/auth/login"` bug; the app told us the real one). Then `browser_wait_for(time = 2000)` so the login form renders before typing.
 2. Try these typed-in selectors in order until one accepts input: `input[type=email]`, `input[name=email]`, `input[name=username]`, `input[autocomplete=username]`. Use `browser_type` with the email value.
 3. `browser_type` on `input[type=password]` with the password value (password is masked in all logs)
 4. `browser_click(button[type=submit])` — fallback to the most-prominent visible submit-shaped element if not found
@@ -130,10 +131,10 @@ These probes use `fetch()` inside the current page — no navigation required. T
 
     **g. Bundle string harvest (runs LAST so lazy chunks loaded via strategies a–d are now in `document.scripts`)** —
       i.   `browser_evaluate(probe.listScriptUrls)` — returns up to 10 same-origin script URLs sorted by size
-      ii.  For top 5 URLs (or all if fewer): `browser_evaluate(probe.fetchBundleHead, {url})` — returns first 200KB of bundle text
-      iii. For each returned chunk, dispatch ONE Sonnet sub-agent:
-           > "This is a chunk of a JavaScript bundle from a SPA. Identify every route path declared in any router configuration (React Router, Vue Router, Angular Router, Next.js routes, SvelteKit, TanStack Router, or any other client-side router). Ignore static asset URLs, API endpoints, CSS selectors, regex patterns. Return JSON array only: `[{ path: '/...', source: 'react-router'|'vue-router'|'angular-router'|'next'|'sveltekit'|'unknown' }]`. Cap 80. Output JSON only, no prose."
-      iv.  Merge each returned path into the candidate route set with `source: 'bundle'`
+      ii.  For top 8 URLs (or all if fewer): `browser_evaluate(probe.fetchBundleHead, {url})` — returns up to 600KB of bundle text. **600KB, not 200KB**, because an Angular/lazy route table frequently sits past the 200KB mark of the main chunk — reading too little is why `viaBundle` came back with only a fraction of the real routes (it found a hidden route but missed routes that link nowhere, including the public ones). If a chunk's `totalLength` exceeds what was returned, ALSO read its tail via `probe.fetchBundleTail` (route configs are sometimes appended late) and feed both slices.
+      iii. For each returned chunk, dispatch ONE Sonnet sub-agent. The prompt MUST name the concrete route-definition SHAPES so nothing is skipped:
+           > "This is a chunk of a JavaScript bundle from a SPA. Extract EVERY client-side route path from any router configuration. Look specifically for: Angular `{ path: '...' }`, `loadChildren`, `redirectTo`, nested `children: [...]`; React Router `<Route path=...>` / `path:` in route objects; Vue `{ path: '...' }`; Next.js / SvelteKit file-route strings; TanStack Router. Include AUTH and PUBLIC paths (login, forgot-password, reset-password, onboarding/register) and feature/permission-gated paths even if nothing links to them. **PRESERVE parameter segments exactly as written — keep `:id`, `:slug`, `*`, `[id]`, `{id}` as-is; do NOT invent concrete ids and do NOT drop the param.** Ignore static asset URLs, API endpoints, CSS selectors, regex/i18n keys. Return JSON array only: `[{ path: '/...', source: 'react-router'|'vue-router'|'angular-router'|'next'|'sveltekit'|'unknown' }]`. Cap 120. Output JSON only, no prose."
+      iv.  Merge each returned path into the candidate route set with `source: 'bundle'`. A returned path containing a param segment (`:id`, `[id]`, `{id}`, `*`) is a **detail-route template** — keep it as-is (it satisfies the "get parameterized routes" requirement even when the live UI opens details as modals); Step 3.2 will attach a real `exampleId` if one is reachable, otherwise it stays a template with `exampleId: null` and is flagged, never dropped.
 
 ### Pass 3 — Per-route enrichment
 
@@ -395,13 +396,30 @@ Hard caps for this pass: max 4 expand rounds, max 30 reconcile-clicks, 1.2 s per
 ```
 
 ```js
-// probe.fetchBundleHead — args: { url }. Returns first 200KB of bundle text.
+// probe.fetchBundleHead — args: { url }. Returns first 600KB of bundle text.
 async ({url}) => {
   try {
     const r = await fetch(url, { credentials: 'same-origin' });
     if (!r.ok) return { ok: false, status: r.status, text: '' };
     const text = await r.text();
-    return { ok: true, status: 200, text: text.slice(0, 200_000), totalLength: text.length };
+    return { ok: true, status: 200, text: text.slice(0, 600_000), totalLength: text.length };
+  } catch (e) {
+    return { ok: false, status: 0, text: '', error: String(e).slice(0, 200) };
+  }
+}
+```
+
+```js
+// probe.fetchBundleTail — args: { url }. Returns the LAST 400KB of a bundle larger
+// than the head read. Angular/webpack sometimes append the route table late in the
+// chunk, past the head window — reading the tail recovers those route definitions.
+async ({url}) => {
+  try {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) return { ok: false, status: r.status, text: '' };
+    const text = await r.text();
+    if (text.length <= 600_000) return { ok: true, status: 200, text: '', totalLength: text.length, note: 'no tail (already covered by head)' };
+    return { ok: true, status: 200, text: text.slice(-400_000), totalLength: text.length };
   } catch (e) {
     return { ok: false, status: 0, text: '', error: String(e).slice(0, 200) };
   }
@@ -568,10 +586,12 @@ function normalise(href, baseUrl) {
 }
 ```
 
-**Detail-route collapsing.** Before dedup, fold actual-id routes into a single template:
+**Detail-route collapsing & template↔instance reconciliation.** Before dedup, fold actual-id routes into a single template AND reconcile them with bundle-declared templates so the deliverable always contains BOTH the static template and (when reachable) one concrete example:
 - `/users/123`, `/users/456`, `/users/abc-uuid-xyz` → collapse to `/users/:id`
 - Detection: if 2+ routes share a parent prefix and differ only in the last segment, AND that segment matches `^[0-9a-fA-F-]{1,40}$` (numeric, hex, or UUID-like) → collapse to `/{prefix}/:id`
 - Always retain the first concrete id as `route.exampleId` for later cell navigation
+- **Even a SINGLE concrete instance collapses** if a bundle template for the same parent exists: a sampled `/users/42` (Step 3.2 `listRowClick`) and a bundle `/users/:id` are the SAME route — merge into one `{ path: '/users/:id', exampleId: '42', source: 'bundle+listRowClick' }`. Never emit both the template and the concrete instance as two routes.
+- **A bundle `:param` template with NO reachable instance is KEPT** as `{ path: '/users/:id', exampleId: null }` and flagged — this is the case for apps (like this one) whose detail views are modals: the route exists in code even though clicking a row opens a dialog instead of navigating. It is reported, never silently dropped. This is how the skill "gets parameterized routes" regardless of whether the live UI exposes a navigable instance.
 
 **Dedup by normalised path.** Skip routes in `qa-state.json → routes.skipped`. Cap total routes at 80.
 
@@ -637,8 +657,8 @@ Field meanings:
 |------|-------|
 | Max routes | 80 |
 | Max scripts scanned for bundle harvest | 10 (top by size) |
-| Bundles passed to Sonnet | 5 (top by size, after nav-click strategies completed) |
-| Per-bundle chars read | 200,000 |
+| Bundles passed to Sonnet | 8 (top by size, after nav-click strategies completed) |
+| Per-bundle chars read | 600,000 head + 400,000 tail (tail only if chunk exceeds head window) |
 | Max sitemap entries harvested | 200 |
 | Max sub-sitemaps followed if root is an index | 5 |
 | Max robots entries harvested | 100 |

@@ -102,6 +102,9 @@ qa-detect-viewport-units        = true   # 100vh-not-dvh (address-bar clip) + re
 # Measures LCP, CLS, INP, TBT, TTFB, FCP via PerformanceObserver injection.
 # Same metrics Lighthouse uses, same thresholds Google ranks pages on.
 qa-detect-web-vitals            = true   # 6 vitals + long-tasks + DOM-size + main-thread-block
+qa-detect-video                 = true   # <video> responsiveness + controls + YouTube/Vimeo iframe wrappers (v2.6.0, 2026-06-04)
+qa-detect-css-compat            = true   # cross-browser CSS gaps: missing vendor prefixes, Safari traps, var() no-fallback (v2.6.0, 2026-06-04)
+qa-detect-hidden-resources      = true   # desktop-only elements hidden on mobile but still downloading images/iframes (v2.6.0, 2026-06-04)
 
 vision_review                   = true
 

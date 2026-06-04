@@ -1,6 +1,6 @@
 ---
 name: qa-detect-layout
-description: "Detects fixed/sticky overflow, narrow content, CTA below fold, dropdown cutoff, content bleed-through, critical-element-hidden, excessive whitespace, sticky-covers-action, table overflow, fixed header obstructing content"
+description: "Detects fixed/sticky overflow, narrow content, CTA below fold, dropdown cutoff, content bleed-through, critical-element-hidden, excessive whitespace, sticky-covers-action, table overflow, fixed header obstructing content, element overlap, grid/flex collapse failures, sticky header too tall on mobile"
 model: haiku
 applyOn: all
 needsSetup: false
@@ -18,6 +18,9 @@ viewportSensitive: true
 - `stickyElementCoversAction` — fixed/sticky bottom element overlapping a button
 - `tableOverflow` — `<table>` wider than its container with no horizontal scroll wrapper (mobile/tablet only)
 - `fixedHeaderObstructsContent` — fixed/sticky top navbar covers the first main content element
+- `elementOverlap` — any interactive element (button, link, input, select) covered by an unrelated element at its center point — not clickable/tappable
+- `gridCollapseIssue` — CSS Grid with fixed multi-column template at mobile/tablet without auto-fit/minmax (won't collapse), OR flex container with flex-wrap:nowrap overflowing at small viewport
+- `stickyHeaderTooTall` — fixed/sticky top header exceeds 15% of viewport height on mobile (≤768px)
 
 ## Probe (browser_evaluate)
 ```js
@@ -183,6 +186,81 @@ viewportSensitive: true
     }
   }
 
+  // 11. elementOverlap — interactive elements visually covered by unrelated elements
+  const interactiveEls = document.querySelectorAll('button:not([disabled]), a[href], input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [role="button"]:not([disabled])');
+  for (const el of interactiveEls) {
+    if (out.length >= 20) break;
+    const r = el.getBoundingClientRect();
+    if (r.width < 5 || r.height < 5) continue;
+    if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
+    const cx = Math.round(r.left + r.width / 2);
+    const cy = Math.round(r.top + r.height / 2);
+    if (cx < 0 || cx > vw || cy < 0 || cy > vh) continue;
+    const topEl = document.elementFromPoint(cx, cy);
+    if (!topEl || topEl === el || el.contains(topEl) || topEl.contains(el)) continue;
+    const topR = topEl.getBoundingClientRect();
+    if (topR.width < 20 && topR.height < 20) continue; // tiny badge/dot — decorative
+    if (getComputedStyle(topEl).pointerEvents === 'none') continue; // passthrough overlay
+    const topRole = topEl.getAttribute('role');
+    if (['tooltip','status','alert','progressbar'].includes(topRole)) continue;
+    // Skip if already caught by criticalElementHidden (submit/CTA buttons)
+    const isCritical = el.matches('button[type="submit"], input[type="submit"], a.cta, .btn-primary, .primary-button, [data-testid*="submit"]');
+    if (isCritical) continue;
+    out.push({ issueType:'elementOverlap', severity:'high', selector:sel(el),
+      description:`Interactive element covered by ${sel(topEl)} at center point — may not be clickable/tappable`, bbox: bb(el) });
+  }
+
+  // 12. gridCollapseIssue + flexNoWrapOverflow — grid/flex that doesn't collapse at mobile/tablet
+  const isSmallViewport = vw <= 1024;
+  if (isSmallViewport) {
+    for (const el of document.querySelectorAll('*')) {
+      if (out.length >= 20) break;
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+
+      if (s.display === 'grid' || s.display === 'inline-grid') {
+        const gtc = s.gridTemplateColumns;
+        if (!gtc || gtc === 'none') continue;
+        if (gtc.includes('auto-fit') || gtc.includes('auto-fill') || gtc.includes('minmax')) continue;
+        // Expand repeat(N, ...) to count columns
+        const expanded = gtc.replace(/repeat\((\d+),\s*[^)]+\)/g, (_, n) => Array(parseInt(n)).fill('col').join(' '));
+        const colCount = expanded.split(/\s+/).filter(Boolean).length;
+        if (colCount < 2) continue;
+        if (el.scrollWidth > el.clientWidth + 5) {
+          out.push({ issueType:'gridCollapseIssue', severity:'medium', selector:sel(el),
+            description:`CSS Grid has ${colCount} fixed columns (${gtc.slice(0,60)}) at ${vw}px viewport without auto-fit/minmax — content overflows instead of collapsing to single column`, bbox: bb(el) });
+        }
+      } else if ((s.display === 'flex' || s.display === 'inline-flex') && s.flexWrap === 'nowrap') {
+        if (el.scrollWidth <= el.clientWidth + 10) continue;
+        const visibleChildren = [...el.children].filter(c => {
+          const cr = c.getBoundingClientRect();
+          return cr.width > 0 && cr.height > 0;
+        });
+        if (visibleChildren.length >= 2) {
+          out.push({ issueType:'gridCollapseIssue', severity:'medium', selector:sel(el),
+            description:`Flex container has flex-wrap:nowrap with ${visibleChildren.length} children and overflows at ${vw}px — items don't wrap on small screens`, bbox: bb(el) });
+        }
+      }
+    }
+  }
+
+  // 13. stickyHeaderTooTall — sticky/fixed header disproportionately tall on mobile
+  if (vw <= 768) {
+    for (const el of document.querySelectorAll('*')) {
+      if (out.length >= 20) break;
+      const s = getComputedStyle(el);
+      if (s.position !== 'fixed' && s.position !== 'sticky') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (r.top > 10) continue; // not anchored at top
+      if (r.height > vh * 0.15) {
+        out.push({ issueType:'stickyHeaderTooTall', severity:'medium', selector:sel(el),
+          description:`Sticky/fixed header is ${Math.round(r.height)}px tall at ${vw}px mobile viewport — exceeds 15% of viewport height (${Math.round(vh * 0.15)}px), leaving insufficient content area`, bbox: bb(el) });
+      }
+    }
+  }
+
   // 10. fixedHeaderObstructsContent — fixed/sticky top navbar covers first main content element
   let topFixed = null;
   let topFixedHeight = 0;
@@ -238,3 +316,7 @@ viewportSensitive: true
 | stickyElementCoversAction | medium | "Button covered by sticky/fixed bottom element" |
 | tableOverflow | medium | "Table wider than container ({tableScrollWidth}px vs {parentClientWidth}px) without horizontal scroll wrapper" |
 | fixedHeaderObstructsContent | medium | "Fixed/sticky header covers first content element — add padding-top or scroll-margin-top" |
+| elementOverlap | high | "Interactive element covered by {coveringEl} at center point — may not be clickable/tappable" |
+| gridCollapseIssue | medium | "CSS Grid has {N} fixed columns at {vw}px without auto-fit/minmax — overflows instead of collapsing" |
+| gridCollapseIssue | medium | "Flex container has flex-wrap:nowrap with {N} children and overflows at {vw}px — items don't wrap" |
+| stickyHeaderTooTall | medium | "Sticky/fixed header is {h}px tall at {vw}px mobile — exceeds 15% of viewport height" |

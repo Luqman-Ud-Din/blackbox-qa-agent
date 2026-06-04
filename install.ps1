@@ -134,6 +134,23 @@ if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Force -Path $
 
 $installBatPath = Join-Path $cacheDir "install.bat"
 
+$mcpTools = @(
+    "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
+    "browser_press_key", "browser_evaluate", "browser_wait_for", "browser_take_screenshot",
+    "browser_console_messages", "browser_network_requests", "browser_close", "browser_resize",
+    "browser_fill_form", "browser_select_option", "browser_hover", "browser_drag",
+    "browser_drop", "browser_handle_dialog", "browser_tabs", "browser_file_upload",
+    "browser_navigate_back", "browser_network_request"
+)
+$mcpServers = @("playwright", "pw-chromium-mobile", "pw-chromium-tablet", "pw-chromium-laptop")
+
+$mcpAllowList = @()
+foreach ($server in $mcpServers) {
+    foreach ($tool in $mcpTools) {
+        $mcpAllowList += "mcp__${server}__${tool}"
+    }
+}
+
 $allowList = @(
     "Bash(bash *)", "Bash(sh *)", "Bash(node *)", "Bash(npx *)", "Bash(npm *)",
     "Bash(curl *)", "Bash(jq *)", "Bash(tsc *)", "Bash(git *)", "Bash(mkdir *)",
@@ -145,20 +162,8 @@ $allowList = @(
     "PowerShell(& `"$installBatPath`")",
     "PowerShell(Get-ChildItem *)", "PowerShell(Get-Content *)", "PowerShell(Set-Content *)",
     "PowerShell(New-Item *)", "PowerShell(Remove-Item *)", "PowerShell(Copy-Item *)",
-    "PowerShell(node *)", "PowerShell(npx *)", "PowerShell(npm *)",
-    "mcp__playwright__browser_navigate",
-    "mcp__playwright__browser_snapshot",
-    "mcp__playwright__browser_click",
-    "mcp__playwright__browser_type",
-    "mcp__playwright__browser_press_key",
-    "mcp__playwright__browser_evaluate",
-    "mcp__playwright__browser_wait_for",
-    "mcp__playwright__browser_take_screenshot",
-    "mcp__playwright__browser_console_messages",
-    "mcp__playwright__browser_network_requests",
-    "mcp__playwright__browser_close",
-    "mcp__playwright__browser_resize"
-)
+    "PowerShell(node *)", "PowerShell(npx *)", "PowerShell(npm *)"
+) + $mcpAllowList
 
 $perms = [ordered]@{
     permissions = [ordered]@{ allow = $allowList }
