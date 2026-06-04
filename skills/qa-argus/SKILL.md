@@ -140,7 +140,7 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 |---|------|------------------|
 | 1 | `{project-root}/.claude/automation.config.json` must exist and have �0�1 app in `apps[]` | Print: "HARD STOP � AUTO-INVOKE qa-argus-setup inline. Only hard-stop AFTER the wizard runs AND still fails to produce a valid config. Never hard-stop on first-run missing-config — that is a setup-wizard signal, not an error." |
 | 2 | When `dry_run = false`, missing ADO credentials are collected interactively at Step 1.5 � never hard-stop on credentials | Ask in Step 1.5, never abort |
-| 3 | **Permanent operational scripts under `scripts/` are the SOURCE OF TRUTH and must NEVER be regenerated.** The orchestrator INVOKES them, never overwrites them. Permitted permanent scripts: `scripts/ado-api.sh`, `scripts/annotate-cell-prepare.cjs`, `scripts/annotate-cell-finalize.cjs`, `scripts/argus-schema.cjs`, `scripts/file-bugs.cjs`, `scripts/repair-bugs.cjs`. Browser ops happen via Playwright MCP tools OR ephemeral `.cjs` files written under `.tmp/{runId}/` ONLY when no permanent script covers the operation. | If a permanent script exists for an operation, CALL IT. Regenerating a permanent script (especially `file-bugs.cjs`) is the historical root cause of empty ADO tickets and is BANNED. |
+| 3 | **Permanent operational scripts under `scripts/` are the SOURCE OF TRUTH and must NEVER be regenerated.** The orchestrator INVOKES them, never overwrites them. Permitted permanent scripts: `scripts/ado-api.sh`, `scripts/annotate-cell.cjs` (deterministic in-script annotation — pure Node, no MCP), `scripts/annotate-cell-prepare.cjs`, `scripts/annotate-cell-finalize.cjs`, `scripts/argus-schema.cjs`, `scripts/file-bugs.cjs`, `scripts/repair-bugs.cjs`. Browser ops happen via Playwright MCP tools OR ephemeral `.cjs` files written under `.tmp/{runId}/` ONLY when no permanent script covers the operation. | If a permanent script exists for an operation, CALL IT. Regenerating a permanent script (especially `file-bugs.cjs`) is the historical root cause of empty ADO tickets and is BANNED. |
 | 4 | **Probe expressions inside SKILL.md ARE allowed.** They are skill specifications consumed by `browser_evaluate` (MCP) or copied into ephemeral .cjs (Bash). `.cjs` and `.js` files inside `skills/*/` (other than the two listed above) are NOT permitted | Probes live as code blocks inside SKILL.md, not as separate files in skill folders |
 | 5 | **NEVER use bash heredoc to embed Node scripts.** `node - <<EOF`, `node -e "..."`, and similar patterns are BANNED. They corrupt JS template literals (backticks, `$`, quotes) on Windows and are fragile on macOS/Linux. ALWAYS use the Write tool to create a `.cjs` file, then `node "{abs-path}"`. | Write �  Bash run, never inline heredoc |
 | 6 | NEVER access any path outside `{project-root}` | Confine all reads/writes/subprocesses to `{project-root}/.claude/` and `{project-root}/.tmp/` |
@@ -1231,26 +1231,17 @@ After Step 5.7 closes for the LAST cell, run the annotation sweep BEFORE Step 5.
 
 🚨 **DO NOT SKIP THIS STEP.** Annotation is a plugin promise — end users install this plugin expecting annotated screenshots in their ADO tickets. The inline call in Step 5.4(h.3) is best-effort; this sweep is the contract.
 
-**Algorithm — MCP-driven, three sub-steps per cell.** For every `cell-*.jsonl` file in `{project-root}/.tmp/{runId}/issues/`:
+**Algorithm — ONE deterministic script per cell (pure Node, no MCP).** For every `cell-*.jsonl` file in `{project-root}/.tmp/{runId}/issues/`:
 
 ```
 list = glob "{project-root}/.tmp/{runId}/issues/cell-*.jsonl"
 
 for cellId in list:
-  # 1a. Build HTML (pure Node)
-  result = Bash("node scripts/annotate-cell-prepare.cjs {runId} {cellId}")
-  if result.exitCode == 5: continue       # cell has no findings
-  if result.exitCode != 0:  log + continue
-  paths = JSON.parse(result.stdout)
-
-  # 1b. Render via MCP (no local chromium)
-  browser_navigate({ url: paths.fileUrl, waitUntil: "load" })
-  browser_take_screenshot({ path: paths.expectedAnnotatedPath, fullPage: true })
-
-  # 1c. Update JSONL (pure Node)
-  result = Bash("node scripts/annotate-cell-finalize.cjs {runId} {cellId}")
-  if result.exitCode != 0: log + continue
+  result = Bash("node scripts/annotate-cell.cjs {runId} {cellId}")
+  # exit 0 = annotated PNG written + JSONL stamped;  2 = base PNG missing;  3 = JSONL missing;  5 = no findings (skip)
+  if result.exitCode not in (0, 5): log + continue
 ```
+`annotate-cell.cjs` decodes the base PNG, draws the severity-colored bbox boxes directly onto it (zlib + pixel write), writes `{cellId}-annotated.png`, and stamps `annotatedScreenshotPath`. No browser, no MCP, no model — so it can never be silently skipped (the previous failure mode).
 
 Behavior:
 - **Idempotent:** re-running on a cell whose findings already have `annotatedScreenshotPath` is a no-op. Both prepare + finalize handle the case gracefully.
@@ -1337,21 +1328,16 @@ All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
       Re-running     : {rerunCount}
       Degraded       : {degradedCount}  → {cellId:skill — reason, ...}
    ```
-6. **ANNOTATION ENFORCEMENT (part of THIS gate — annotated screenshots are a plugin promise, and the inline Step 5.4 h.3 is routinely skipped).** This is the ONLY place annotation is guaranteed. For every `issues/cell-*.jsonl` that has at least one real finding (ignore `_coverage` lines), run the 3-step pipeline NOW:
+6. **ANNOTATION ENFORCEMENT — now a single DETERMINISTIC script per cell (no MCP, no model, cannot be skipped).** Annotation draws the bbox boxes directly onto the base PNG in pure Node — there is no render step for the model to skip. For every `issues/cell-*.jsonl` that has at least one real finding (ignore `_coverage` lines), run:
    ```
    for each cell-*.jsonl with findings:
-     a. node "{project-root}/scripts/annotate-cell-prepare.cjs" "{runId}" "{cellId}"
-        • exit 5 → no findings → skip cell
-        • exit 2 → base PNG missing → re-take this cell's base screenshot first, then retry (a)
-        • exit 0 → parse stdout JSON → { fileUrl, expectedAnnotatedPath }
-     b. browser_navigate(url = fileUrl, waitUntil = "load")
-        browser_take_screenshot(filename = "<same screenshots dir that holds {cellId}-base.png>/{cellId}-annotated.png", fullPage = true)
-        ← MUST land next to the base PNG in .tmp/{runId}/screenshots/. Use the IDENTICAL path form you used for the base screenshot (that location is confirmed writable). A bare name lands in .playwright-mcp/ and finalize won't find it.
-     c. node "{project-root}/scripts/annotate-cell-finalize.cjs" "{runId}" "{cellId}"
-        • exit 0 → annotatedScreenshotPath written into every finding of the cell
-        • exit 2 → annotated PNG not found → the screenshot in (b) landed in the wrong dir → redo (b) with the correct path
+       node "{project-root}/scripts/annotate-cell.cjs" "{runId}" "{cellId}"
+         • exit 0 → {cellId}-annotated.png written + annotatedScreenshotPath stamped into the JSONL
+         • exit 2 → base PNG missing → re-take this cell's base screenshot (Step 5.4h, absolute path) then retry
+         • exit 3 → JSONL missing (shouldn't happen) → log + continue
+         • exit 5 → no findings → skip cell
    ```
-   Then RE-SCAN every finding: each must have a non-empty `annotatedScreenshotPath` whose file exists. Any finding still missing it after one retry → set `screenshotSkipReason` (e.g. `"annotated render failed"`) so file-bugs falls back to base KNOWINGLY, and log it. Emit:
+   This replaces the old prepare → MCP-render → finalize pipeline. Because `annotate-cell.cjs` is pure code (zlib + box drawing), every cell with findings gets an annotated PNG — the model is not in the loop, so it can't be bypassed. Then RE-SCAN every finding: each must have a non-empty `annotatedScreenshotPath` whose file exists. Any still missing after one retry → set `screenshotSkipReason` so file-bugs falls back to base KNOWINGLY, and log it. Emit:
    ```
    🖼️  Annotation gate
       Findings         : {findingsTotal}
