@@ -27,6 +27,7 @@ escalation_model       = "sonnet"
 qa-detect-overflow              = true
 qa-detect-typography            = true
 qa-detect-typography-advanced   = true
+qa-detect-typography-responsive = true   # responsive/legibility gaps: fluid type, justified-hyphens, text-over-image, px sizing, tabular figures
 qa-detect-touch                 = true
 qa-detect-images                = true
 qa-detect-layout                = true

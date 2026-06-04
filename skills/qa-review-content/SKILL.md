@@ -22,6 +22,7 @@ Everything that requires judgment over visible page text. This is the Sonnet hal
 | `awkwardPhrasing` | low | Run-on sentences, stilted machine-translated copy |
 | `capitalizationInconsistency` | low | Headings mixing Title Case / sentence case / ALL CAPS |
 | `punctuationError` | low | Missing periods, double commas, no space after punctuation |
+| `terminologyInconsistency` | medium | The SAME action/label uses different words across the page — "Sign in" vs "Log in", "Cancel" vs "Close", "Delete" vs "Remove", "Edit" vs "Modify". Pick one term per concept. Judge only same-meaning verbs/labels; do NOT flag genuinely different actions. |
 
 ### Legal/compliance mode (route matches `content.legal_routes`)
 

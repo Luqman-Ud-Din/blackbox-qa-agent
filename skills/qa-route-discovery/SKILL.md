@@ -17,6 +17,47 @@ Works for any SPA framework: Angular, React, Vue, Next.js, SvelteKit, plain HTML
 
 Run four passes: static manifests, unauthenticated browser, authenticated browser, per-route enrichment. Each pass adds candidate routes into the same set; normalisation + dedup runs at the end.
 
+---
+
+## 🚨 DISCOVERY CONTRACT — a RELENTLESS loop, not a one-pass scan (READ AND FOLLOW FIRST)
+
+The deliverable is a **COMPLETE route set, proven** — never "whatever I found on the first look." The #1 failure mode is **stopping early**: one run finds 19, the next 16, the next 10. That destroys trust. To eliminate it, discovery is a **breadth-first crawl that loops until it can PROVE nothing is left.** This is the law that overrides any per-pass shortcut.
+
+**Maintain three sets in memory for the whole run:**
+- `visited` — routes already navigated to AND fully harvested.
+- `frontier` — routes discovered but NOT yet visited.
+- `navInventory` — every clickable nav / sidebar / menu / tab LABEL ever seen, captured AFTER expanding all collapsed groups.
+
+**THE LOOP — repeat until the completeness gate below passes (there is NO cap on loop iterations):**
+
+1. **Seed:** after login, set `frontier` = every route harvested from the landing page (anchors + router-attrs + intercepted history + **the JS-bundle route table — MANDATORY, this is the app's own list of routes, see strategy 2.g; it finds routes nothing links to**). 
+2. **Drain the frontier:** while `frontier` is non-empty:
+   a. Pop a route → `browser_navigate` to it → 1s wait.
+   b. **Expand every collapsed nav group** (`probe.expandCollapsedNav`, loop until it returns `expanded === 0`). Add every revealed label to `navInventory`.
+   c. **Harvest this page:** anchors, router-attrs, intercepted pushState/replaceState, hash routes.
+   d. **Click EVERY interactive element that could navigate — exhaustively, NOT a sample.** Enumerate every visible, not-yet-clicked: link (`a`), button (`button`, `[role=button]`, `input[type=submit]`, `input[type=button]`), tab (`[role=tab]`, segmented controls, sidebar tabs), and menu/sidebar item (`[role=menuitem]`, nav `li`/`a`). For EACH, in order:
+      - 🛑 **SKIP if its text/aria-label matches a DESTRUCTIVE/mutating action** — `delete, remove, logout, sign out, submit, save, pay, purchase, buy, checkout, confirm, cancel, deactivate, archive, send, approve, reject, unsubscribe, reset`. These mutate data or end your session — NEVER click them during discovery. (Everything else IS clicked.)
+      - Read `location.pathname` → `browser_click` → 800 ms wait → read `location.pathname` again.
+      - **URL changed → it IS a ROUTE** → push to `frontier` if new → then `browser_navigate` BACK to the current route to keep clicking the remaining elements.
+      - URL unchanged but a **modal/drawer/submenu opened** → harvest any links it revealed (they may be routes), then `browser_press_key("Escape")` and continue.
+      - URL unchanged, nothing opened → it's a tab/toggle, not a route → continue.
+      Decide tab-vs-route ONLY by the URL check above — never by appearance. You MUST attempt every non-destructive interactive element on the page (bounded by `max_interactive_per_page`, default **60**, only to stop runaway pages). Do NOT sample, do NOT stop after the first few.
+   e. Push every NEW same-origin route to `frontier`; move the current route to `visited`.
+3. **Dry-pass check:** when `frontier` empties, do ONE more full sweep over `visited`, re-expanding nav and re-harvesting. If it adds **zero** new routes → `dryPasses++`. If it adds any → `dryPasses = 0` and keep looping.
+
+**COMPLETENESS GATE — you may finish ONLY when ALL three hold:**
+- `frontier` is empty, **AND**
+- `dryPasses >= 2` (two consecutive full sweeps found nothing new), **AND**
+- **Nav accounting:** every label in `navInventory` maps to a route in `visited`. Any label that does NOT → click it, record its route, set `dryPasses = 0`, and loop again.
+
+If you stop before all three are true, you have silently dropped routes — the exact 19→16→10 bug. **Log the proof when you finish:**
+```
+🧭 Discovery complete: {visited.size} routes, {navInventory.size} nav labels all mapped, {dryPasses} dry passes. frontier empty.
+```
+The per-action caps further below (timeouts, max clicks per page) still apply — they bound a single page, NOT the loop. The loop runs until the gate passes.
+
+---
+
 ### Pass 0 — Static manifests (called from any page via fetch)
 
 These probes use `fetch()` inside the current page — no navigation required. They preserve current page state and work whether the page is HTML or PDF or anything else.
@@ -603,13 +644,14 @@ Field meanings:
 | Max robots entries harvested | 100 |
 | Max SW cache entries harvested | 100 |
 | Max command palette items | 10 |
-| Max nav-click items in strategy d | 20 |
+| Max interactive elements clicked per page (exhaustive loop step d) | 60 (`max_interactive_per_page` — bounds runaway pages only; click ALL non-destructive elements up to this) |
+| Max nav-click items in strategy d | 20 (legacy single-pass; superseded by the exhaustive loop) |
 | Max nav-expand toggles clicked (per call) | 40 |
 | Max sidebar expand rounds (iterative) | 3 (Pass 2) / 4 (Pass 5) |
 | Max sidebar reconcile-clicks (Pass 5) | 30 |
 | Max hover-menu reveals per pass | 6 |
 | Max tab candidates per route | 12 |
-| Max CTA buttons per route | 4 |
+| Max CTA buttons per route | 4 (legacy; the exhaustive loop now clicks every non-destructive button) |
 | Per-page navigate timeout | 20 s |
 | Post-login wait | 5 s (SPA redirect chain) |
 | Nav click wait | 1.2–1.5 s per item |

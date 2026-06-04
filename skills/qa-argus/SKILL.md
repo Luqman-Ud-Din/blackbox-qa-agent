@@ -1,6 +1,6 @@
 ---
 name: qa-argus
-description: "Argus � autonomous UI quality verification across browsers and viewports"
+description: "Argus � autonomous UI auditor. USE THIS SKILL whenever the user wants to QA, audit, test, check, scan, review, or inspect a website / web app or any of its pages — or mentions UI bugs, broken layout, responsiveness, mobile/tablet/desktop issues, accessibility, forms, navigation, or cross-browser problems — or names an app or pastes a URL to test — or addresses Argus directly. Natural-language triggers include: 'audit my app', 'test undertakings', 'check https://… for bugs', 'run a QA audit', 'find UI bugs on my site', 'scan the dashboard', 'is my app responsive', and greetings like 'hi argus' / 'hey argus'. Argus autonomously crawls every route across browsers and viewports, detects layout/accessibility/form/network/responsiveness defects, captures annotated screenshots, and files bug tickets."
 ---
 
 # �: BOUNDARY ENFORCEMENT � READ THIS BEFORE ANYTHING ELSE
@@ -173,11 +173,11 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
 - **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
-- **Detection (39):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
+- **Detection (40):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 70 skills**
+- **Total: 71 skills**
 
 ---
 

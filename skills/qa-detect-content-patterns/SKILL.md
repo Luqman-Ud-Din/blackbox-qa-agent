@@ -20,7 +20,7 @@ This skill is **Layer 1** of a two-layer strategy:
 
 Layer 2 receives this layer's findings as context and is instructed to NOT re-flag confirmed patterns AND to confirm/dismiss candidate flags from this layer.
 
-## What it catches — 13 issue types
+## What it catches — 18 issue types
 
 | issueType | severity | What | Layer relationship |
 |-----------|----------|------|--------------------|
@@ -37,6 +37,11 @@ Layer 2 receives this layer's findings as context and is instructed to NOT re-fl
 | `genericCTACopy` | medium | Button/link text matches blacklist (`Click here`, `Submit`, `More`, `Learn more`, `Read more`, etc.) | L1 final |
 | `homophoneCandidate` | low | Sentence contains a homophone pair — Layer 2 grades correctness | L1 → L2 confirm |
 | `candidateMisspelling` | low | 5+ char word not in stopword list, not proper noun, not technical token — Layer 2 confirms with real dictionary | L1 → L2 confirm |
+| `doubledWord` | medium | Accidental word repetition ("the the", "is is", "and and") | L1 final |
+| `spacingError` | low | Space before punctuation ("word ,") or multiple consecutive spaces | L1 final |
+| `spellingLocaleMix` | low | Both UK and US spellings of the same word on the site (colour/color, organise/organize) | L1 final |
+| `junkDataLeak` | high | Placeholder/test data in production (asdf, qwerty, foo bar, John Doe, test@test.com, 123 Main St) | L1 final |
+| `brandInconsistency` | medium | Proper noun used with inconsistent casing vs the configured spelling (DoWeb vs Doweb vs DOWEB) | L1 final |
 
 ## Probe input schema
 
@@ -428,6 +433,63 @@ If `properNouns` is missing, the probe falls back to `[]` and Layer 2 handles br
   };
 
   walk(document.body);
+
+  // ── Full-page deterministic checks (gap-fill 2026-06-04) ─────────────────
+  (() => {
+    const bodyText = (document.body.innerText || '').replace(/ /g, ' ');
+    const lc = bodyText.toLowerCase();
+
+    // 14. Doubled words ("the the", "is is") — exclude legitimate repeats
+    const DOUBLE_OK = new Set(['had','that','this','no','very','really','ha','blah','sing','beep']);
+    const dblRe = /\b([a-z]{2,})\s+\1\b/gi;
+    let dm; const dblSeen = new Set();
+    while ((dm = dblRe.exec(bodyText)) !== null) {
+      const w = dm[1].toLowerCase();
+      if (DOUBLE_OK.has(w) || dblSeen.has(w)) continue;
+      dblSeen.add(w);
+      push({ issueType: 'doubledWord', severity: 'medium', selector: 'body',
+        description: `Doubled word: "${dm[0]}" — likely an accidental repetition.`, snippet: dm[0] });
+      if (dblSeen.size >= 5) break;
+    }
+
+    // 15. Spacing — space before punctuation (renders visibly) + run-on double spaces
+    let sm = bodyText.match(/\w\s[,.;:!?](?:\s|$)/);
+    if (sm) push({ issueType: 'spacingError', severity: 'low', selector: 'body',
+      description: `Space before punctuation (e.g. "${sm[0].trim()}") — remove the space.`, snippet: sm[0].slice(0, 40) });
+    let dsm = bodyText.match(/\S {2,}\S/);
+    if (dsm) push({ issueType: 'spacingError', severity: 'low', selector: 'body',
+      description: `Multiple consecutive spaces in visible text.`, snippet: dsm[0].slice(0, 40) });
+
+    // 16. US/UK spelling mixed on the same site
+    const UK_US = [['colour','color'],['favourite','favorite'],['organise','organize'],['organisation','organization'],['centre','center'],['catalogue','catalog'],['cancelled','canceled'],['behaviour','behavior'],['analyse','analyze'],['labour','labor'],['defence','defense'],['grey','gray'],['programme','program'],['enquiry','inquiry'],['licence','license']];
+    for (const [uk, us] of UK_US) {
+      if (new RegExp('\\b'+uk+'\\b','i').test(lc) && new RegExp('\\b'+us+'\\b','i').test(lc)) {
+        push({ issueType: 'spellingLocaleMix', severity: 'low', selector: 'body',
+          description: `Mixed UK/US spelling on the same site: "${uk}" and "${us}". Pick one locale and be consistent.`, snippet: uk+' / '+us });
+        break;
+      }
+    }
+
+    // 17. Junk / placeholder test-data leaked to production (lorem handled separately)
+    const JUNK = [/\basdf+\b/i, /\bqwerty\b/i, /\bfoo\s*bar\b/i, /\btest\s+test\b/i, /\b(john|jane)\s+doe\b/i, /\b(test|example|sample|foo)@(test|example|sample|email)\.(com|test|org)\b/i, /\b123\s+main\s+st/i, /\bxxxx+\b/i];
+    for (const re of JUNK) {
+      const jm = bodyText.match(re);
+      if (jm) { push({ issueType: 'junkDataLeak', severity: 'high', selector: 'body',
+        description: `Placeholder/test data visible in production: "${jm[0]}".`, snippet: jm[0] }); break; }
+    }
+
+    // 18. Brand / proper-noun casing consistency (DoWeb vs Doweb vs DOWEB)
+    for (const brand of (cfg.properNouns || [])) {
+      if (!brand || brand.length < 3) continue;
+      const re = new RegExp('\\b' + brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+      const variants = new Set(); let bm;
+      while ((bm = re.exec(bodyText)) !== null) { variants.add(bm[0]); if (variants.size > 6) break; }
+      const wrong = [...variants].filter(v => v !== brand);
+      if (wrong.length) push({ issueType: 'brandInconsistency', severity: 'medium', selector: 'body',
+        description: `Brand "${brand}" appears with inconsistent casing: ${[...variants].join(', ')}. Use "${brand}" everywhere.`, snippet: wrong.join(', ').slice(0, 80) });
+    }
+  })();
+
   return out;
 })
 ```
