@@ -19,16 +19,19 @@
     ".claude-plugin",
     "skills",
     "scripts",
+    "test-cases",
     "README.md"
   ],
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "playwright": "^1.40.0"
+  },
   "devDependencies": {},
   "optionalDependencies": {
     "@playwright/test": "^1.40.0"
   },
   "private": true,
-  "_dependencyNote": "Main audit flow uses MCP for browser ops + pure-Node scripts. @playwright/test is OPTIONAL — only needed for scripts/repair-bugs.cjs (a recovery tool for re-filing bugs from prior audits). Bash-fallback mode also benefits from it."
+  "_dependencyNote": "scripts/run-passive-probes.cjs runs ALL passive probes deterministically via the `playwright` package (the production fix for skill-collapse + fabrication). Requires `npx playwright install` for browser binaries. Interactive skills + route discovery still use MCP. @playwright/test stays optional (repair-bugs.cjs)."
 }

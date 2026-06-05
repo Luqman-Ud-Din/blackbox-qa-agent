@@ -16,3 +16,15 @@ node_modules/
 test-results/
 playwright-report/
 .playwright-mcp
+
+# Stray audit-time artifacts — these belong in .tmp/{runId}/, never the repo root.
+# Guards against the freelance-runner / result-dump junk an audit can drop at root.
+/run-group-*.js
+/run-all-cells.cjs
+/run-cells-batch.js
+/cell-runner.cjs
+/argus-runner.*
+/argus-process.cjs
+/merge-results.cjs
+/*-results.json
+/cell-*-b*.json

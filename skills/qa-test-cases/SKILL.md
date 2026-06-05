@@ -1,19 +1,20 @@
 ---
 name: qa-test-cases
-description: "Executes human-written test cases from .claude/qa-test-cases.md"
+description: "Executes human-written test cases from test-cases/{appName}.md — ships with the plugin so every installer gets them automatically"
 model: sonnet
 applyOn: [desktop]
 needsSetup: false
 viewportSensitive: false
 interactive: true
-selfSkip: "if {project-root}/.claude/qa-test-cases.md does not exist"
+selfSkip: "if {project-root}/test-cases/{appName}.md does not exist"
 ---
 
 ## Self-skip
-Skip if `{project-root}/.claude/qa-test-cases.md` does not exist.
+Derive `appName` from `resolvedConfig.app.name` (the app being audited).
+Skip if `{project-root}/test-cases/{appName}.md` does not exist.
 
 ## Execution
-- Read `{project-root}/.claude/qa-test-cases.md`
+- Read `{project-root}/test-cases/{appName}.md`
 - Parse sections: split on `/\n(?=#{2,3}\s)/`. Each section = one test case.
 - Check `route:` line in section — skip if route doesn't match `cell.route`
 - Extract steps: lines starting with `\d+\.|\-|\*`

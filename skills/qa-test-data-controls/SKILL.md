@@ -31,10 +31,36 @@ Define **applySearch(value)** — set the input, then make the app actually RUN 
    - `rowsAfter === 0` AND no empty-state text matching `/no results|nothing found|no .* found|empty|0 results/i` visible → `noEmptyState` (medium).
 3. **Clear:** reset the input to `''`, re-trigger (Enter / button if the app needs it), wait 500ms → `rowsCleared`.
    - `rowsCleared < rowsBefore` → `filterClearBroken` (medium) — clearing didn't restore the list.
-4. **Happy (match):** take a token (first word ≥3 chars) from the FIRST data row's text. `applySearch(token)` → `rowsMatch`.
-   - `rowsMatch === 0` → `searchMatchReturnsNothing` (high) — searching an on-screen value returns nothing.
-   - `rowsMatch > rowsBefore` → `uncertain: true` (escalate: did it actually filter or reload everything?).
-   - Reset to `''`, re-trigger, wait 500ms.
+4. **Happy (match) — verify search ACTUALLY filters by picked values:**
+
+   Run this verification TWICE — once with a token from the FIRST data row, once with a token from a MIDDLE row (rowIdx = floor(rowsBefore/2)).
+   This catches the bug class where the search input accepts input but does nothing to the data (your "rrtwtewrwrerewerrrfewrfwefr" still showing 2 rows screenshot).
+
+   For each iteration:
+   a. Pick a token: take the longest word (≥3 chars, no punctuation) from the chosen data row's text. If the row has a distinctive column like an ID code or supplier name, prefer that.
+      Record `pickedToken`, `pickedFromRowIdx`, and `originalRowsBefore`.
+
+   b. `applySearch(pickedToken)` → `rowsMatch` (the new row count after search).
+
+   c. Check 1 — search effect on matching value:
+      - `rowsMatch === 0` → `searchMatchReturnsNothing` (high). The picked value IS on the page but search returns zero — broken matching logic. Evidence: `{ pickedToken, pickedFromRowIdx }`.
+      - `rowsMatch === originalRowsBefore AND rowsBefore > 1` → `searchNoEffect` (high). Search is a no-op even for a valid value — same bug as the gibberish-search no-op.
+
+   d. Check 2 — verify remaining rows ACTUALLY contain the picked token:
+      Read the text of all visible rows after the search. Each should contain the picked token (case-insensitive substring) OR a closely related value.
+      - If `rowsMatch >= 1` AND zero of the visible rows contain `pickedToken` (case-insensitive) → `searchResultsContainNonMatchingRows` (high). The search "filtered" but to the wrong rows.
+        Evidence: `{ pickedToken, visibleRowTexts: [...sampled rows...] }`.
+
+   e. Check 3 — total-count footer should reflect the filter:
+      Read any visible "X total" / "showing X" / "X results" text near the table (typically in the footer).
+      - If a total was previously `originalRowsBefore` and `rowsMatch < originalRowsBefore` but the footer total still shows the original number → `searchTotalCountStale` (medium). Evidence: `{ totalTextBefore, totalTextAfter, rowsMatch }`.
+
+   f. Check 4 — picked-value-not-in-results:
+      If the user-visible value the search WAS picked from is no longer in the result, AND rowsMatch > 0 → `searchPickedValueNotInResults` (high). Catches the search ROUTED to the wrong column.
+
+   g. Reset to `''`, re-trigger, wait 500ms before next iteration.
+
+   After both iterations: if both produced identical "searchNoEffect" results → high confidence the search is broken globally; if they differ → log evidence per iteration.
 
 **Filter dropdowns / comboboxes — change EACH and verify the list reacts:**
 Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, or `[aria-haspopup="listbox"]` button that is **NOT** the pagination "items per page" control and **NOT** a sortable-column menu. Cap 4 filters per page.
@@ -129,6 +155,9 @@ Targets buttons / dropdowns whose label matches `/last\s+\d+\s+(days|weeks|month
 |---|---|---|
 | searchNoEffect | high | Filter/search did not narrow results on a no-match query (after live + Enter + button triggers all tried) |
 | searchMatchReturnsNothing | high | Searching a value visible on the page returned zero rows |
+| searchResultsContainNonMatchingRows | high | After search, visible rows do not contain the searched token (search filtered to wrong rows) |
+| searchTotalCountStale | medium | "X total" footer count does not update after a search reduces visible rows |
+| searchPickedValueNotInResults | high | Token picked from a visible row is missing from search results — search routed to wrong column or logic broken |
 | filterClearBroken | medium | Clearing the search/filter did not restore the full list |
 | filterDropdownNoEffect | high | Changing a filter dropdown/combobox to a different option did not change the list |
 | filterModalNoEffect | high | Setting a criterion in a filter modal/panel and applying it did not change the list |

@@ -173,12 +173,12 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
 - **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
-- **Detection (40):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
-- **UX (11, added 2026-06-04):** `qa-detect-ux-actions`, `qa-detect-ux-affordance`, `qa-detect-ux-feedback`, `qa-detect-ux-icons`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`
+- **Detection (43):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-css-compat`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hidden-resources`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-video`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
+- **UX (28, expanded 2026-06-05):** `qa-detect-ux-actions`, `qa-detect-ux-active-state`, `qa-detect-ux-affordance`, `qa-detect-ux-alignment`, `qa-detect-ux-breadcrumb`, `qa-detect-ux-card-consistency`, `qa-detect-ux-card-usage`, `qa-detect-ux-feedback`, `qa-detect-ux-format-consistency`, `qa-detect-ux-hover`, `qa-detect-ux-icons`, `qa-detect-ux-input-width`, `qa-detect-ux-media-shape`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-overlap`, `qa-detect-ux-page-header`, `qa-detect-ux-pagination`, `qa-detect-ux-required-state`, `qa-detect-ux-selected-color-mix`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`, `qa-detect-ux-toolbar-consistency`, `qa-detect-ux-truncation`, `qa-detect-ux-whitespace`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 82 skills**
+- **Total: 102 skills**
 
 ---
 
@@ -645,7 +645,23 @@ LOG: "�xa� Step 5: Running skill checks"
 
 No permanent runner. The orchestrator drives the browser via Playwright MCP tools (or inline Bash + Playwright fallback) and dispatches each cell's work on the model the skill declares.
 
-#### 5.0.A — Build the coverage ledger (MANDATORY checklist — do this BEFORE the per-cell loop)
+#### 5.0.A — Bundle probes + build coverage ledger (MANDATORY — do this BEFORE workers are dispatched)
+
+🚨 **FIRST: run bundle-probes.cjs.** This reads EVERY enabled skill's SKILL.md, extracts probe expressions and frontmatter, and writes them to `skill-probes.json`. Workers read this ONE file — they do NOT use model memory to decide which skills to run. This is the fix for the bug where workers ran only ~12 skills from training memory.
+
+```
+node "{project-root}/scripts/bundle-probes.cjs" "{runId}"
+```
+
+Expected output: `✓ passive skills (have probe): 39   ✓ interactive (MCP-driven): 35`
+If this fails, HARD STOP — do not dispatch workers without the probe bundle.
+
+After bundle-probes.cjs succeeds, immediately read the output file and hold it in memory:
+```
+skillProbeBundle = JSON.parse( read("{project-root}/.tmp/{runId}/skill-probes.json") )
+```
+This variable is passed verbatim into every worker dispatch prompt (Step 5.1b `enabledSkills`).
+This is the ONLY source of the skill list — never use model memory.
 
 🚨 This step is what makes silent skips impossible. The audit's deliverable is NOT "some findings" — it is a COMPLETE LEDGER proving every applicable (cell × skill) pair was accounted for. The run may not finish until the ledger is complete (enforced in Step 5.9).
 
@@ -673,6 +689,23 @@ No permanent runner. The orchestrator drives the browser via Playwright MCP tool
    ```
 
 Every `expected` line MUST become `done` / `clean` / `skipped` / `error` (Step 5.4 j.1) before the audit may finish. Any line left `expected` is a silent skip — Step 5.9's finish-gate will catch it and re-run or surface it.
+
+#### 5.0.B — Run ALL passive probes DETERMINISTICALLY (MANDATORY — do this BEFORE model workers)
+
+🚨 **This is the production fix for skill-collapse + fabrication.** The 57 passive probes are deterministic JavaScript — they need no model judgment. Running them through a model (MCP `browser_evaluate` driven by a worker) is what collapsed 57→9 and invented issueTypes. Instead, execute them as real Playwright code:
+
+```
+node "{project-root}/scripts/run-passive-probes.cjs" "{runId}" --browsers={comma-separated engines from resolvedConfig.browsers}
+```
+
+This launches each engine, logs in once (reading creds from `secrets.json → apps[appName]`), and for EVERY cell runs ALL 57 passive probes in one `page.evaluate` — a code `for`-loop that **cannot** skip a skill or rename an issueType. It writes, per cell:
+- `issues/{cellId}.jsonl` — findings, VERBATIM from the probe (real issueTypes, real `getBoundingClientRect` bboxes → annotatable)
+- `issues/{cellId}-probes.json` — the passive coverage receipt (all 57 skill keys)
+- `screenshots/{cellId}-base.png` — the base screenshot
+
+Expected output: `✓ {cellId} … — 57/57 probes, N findings` for every cell. If a cell shows fewer than 57 probes, or the run errors, surface it — do NOT proceed to filing.
+
+**After this step the passive layer is DONE and PROVEN** (coverage-gate Step 5.9.0 confirms 100% passive). Model workers (Step 5.1b) now drive **ONLY the 35 interactive skills** per cell — they MUST NOT re-run passive probes (already complete and verbatim). Each worker appends interactive findings to the existing `{cellId}.jsonl` and writes `{cellId}-interactive.json` (the interactive receipt). This split — deterministic passive + model-driven interactive — is what makes "all skills run, none fabricated" true by construction instead of by hoping the model complies.
 
 #### 5.1 � Determine enabled skills + model routing
 
@@ -852,11 +885,25 @@ Run context:
   runId:          "${runId}"
   baseUrl:        "${resolvedConfig.baseUrl}"
   email:          "${email}"        password: (provided securely; mask in all output)
-  resolvedConfig: <full config including resilience, content, viewports, browsers>
+  projectRoot:    "${projectRoot}"
+  resilience:     ${JSON.stringify(resolvedConfig.resilience)}
+
+🚨 SKILL LIST — use ONLY these. DO NOT use model memory to decide which skills to run.
+Read {projectRoot}/.tmp/${runId}/skill-probes.json at the start of Step 2.
+That file has every skill name, its probe expression, applyOn, and interactive flag.
+Run EVERY passive skill whose applyOn matches your viewportClass.
+This list was built from customize.toml by bundle-probes.cjs — it is the ground truth.
+
+enabledSkills: ${JSON.stringify(skillProbeBundle.skills.map(s => ({
+  name: s.name,
+  applyOn: s.applyOn,
+  interactive: s.interactive,
+  model: s.model
+})))}
 
 Follow qa-cell-worker/SKILL.md exactly:
   1. Log in on YOUR server: mcp__${serverName}__browser_navigate(loginPath) → fill email+password → submit → wait.
-  2. For each cell: navigate, run the cell's applicableSkills (from the coverage ledger), screenshot to the ABSOLUTE .tmp/{runId}/screenshots/{cell.id}-base.png path, write findings JSONL + ledger marks, annotate.
+  2. Read skill-probes.json → filter by your viewportClass → batch ALL passive probes in ONE browser_evaluate → drive interactive skills → screenshot (absolute path) → write JSONL → annotate.
   3. Return summary { workerIndex, serverName, cellsProcessed, cellsSkipped, cellsTimedOut, findingsTotal }`
   })
 }
@@ -1319,7 +1366,23 @@ All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
 
 #### 5.9 — Coverage finish-gate (MANDATORY — the run may NOT complete until this passes)
 
-🚨 This is the gate that makes "nothing silently skipped" real. Run it after Step 5.8 and BEFORE Step 6. It cannot be skipped by reasoning — "I think coverage is fine" is not allowed; the ledger is the proof.
+🚨 This is the gate that makes "nothing silently skipped" real. Run it after Step 5.8 and BEFORE Step 6. It cannot be skipped by reasoning — "I think coverage is fine" is not allowed; the EVIDENCE is the proof.
+
+##### 5.9.0 — EVIDENCE GATE (deterministic, runs FIRST — model marks are NOT trusted)
+
+🚨 **The coverage-ledger marks are model-written and therefore NOT proof.** A worker can stamp every row `done` while running 9 of 92 skills (this is the confirmed run-005 failure: ledger said 5967/5967 done, real receipts = 0). Coverage is verified from HARD EVIDENCE — the two per-cell receipts the worker dumps: `issues/{cellId}-probes.json` (the 57 PASSIVE skills, Step 3b) and `issues/{cellId}-interactive.json` (the 35 INTERACTIVE skills, Step 5b). **All 92 skills are gated — none is exempt.** Run the permanent gate:
+
+```
+node "{project-root}/scripts/coverage-gate.cjs" "{runId}"
+```
+
+- **exit 0** → every applicable (cell × skill) pair — passive AND interactive — has a receipt. Coverage is REAL. Proceed to sub-step 1 (screenshots).
+- **exit 1** → INCOMPLETE. `coverage-missing.json` lists the exact `(cellId, skill, kind)` pairs that never executed (and any cells with no receipt at all). **Re-dispatch ONLY those pairs** through the Step 5.4 loop (scoped, same as `--resume`): for each affected cell, re-run the missing PASSIVE skills (full `passiveSkills` batch → re-dump `{cellId}-probes.json`) and/or re-drive the missing INTERACTIVE skills (→ re-dump `{cellId}-interactive.json`), then **GO BACK and re-run `coverage-gate.cjs`.** Loop until exit 0 or `coverage_max_retries` reached. If retries are exhausted with pairs still missing, mark those pairs `degraded` in the ledger with reason `"skill produced no receipt after N retries"` and surface them in the Step 8 report — NEVER present them as covered.
+- **exit 3** → `skill-probes.json` or `audit-plan.json` missing. Re-run `bundle-probes.cjs` (Step 5.0.A); if it still fails, HARD STOP — you cannot verify coverage, so you cannot claim it.
+
+**The run may not advance to sub-step 1 until `coverage-gate.cjs` exits 0 (or remaining pairs are explicitly `degraded` after exhausting retries).** "Most skills ran" is not acceptable — the gate names every missing one, passive or interactive, and they get re-run.
+
+##### 5.9.1 — Interactive evidence + annotation (after the evidence gate passes)
 
 1. Read `{project-root}/.tmp/{runId}/coverage-ledger.jsonl`.
 2. Find every line still `status:"expected"` → these are SILENT SKIPS: a (cell × skill) pair that was planned but never ran (this is exactly what dropped tablet + ~48 skills in run-audit1).

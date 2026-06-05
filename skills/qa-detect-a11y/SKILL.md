@@ -42,9 +42,22 @@ viewportSensitive: false
     }
   }
 
+  // noH1: only flag REAL content pages that have NO heading structure at all.
+  // Minimal utility pages (login, forgot-password, OTP) legitimately may not need an
+  // H1, and pages that use an h2/[role=heading] as their title are not "headingless".
+  // Flagging every H1-less page produced noise tickets (e.g. forgot-password), so we
+  // require: (a) no h1-h6 AND no [role=heading] anywhere, AND (b) substantial body
+  // content (a real page, not a one-field form). Severity is medium (not auto-critical).
   if (document.querySelectorAll('h1').length === 0) {
-    out.push({ issueType:'noH1', severity:'high', selector:null,
-      description:'Page has no <h1> heading — add a single H1 as the primary page title' });
+    const hasAnyHeading = !!document.querySelector('h2, h3, h4, h5, h6, [role="heading"], [aria-level]');
+    const bodyTextLen   = (document.body.innerText || '').replace(/\s+/g, ' ').trim().length;
+    const interactiveCount = document.querySelectorAll('a, button, input, select, textarea, [role="link"], [role="button"]').length;
+    // "Real content page" = lots of text OR a rich interactive surface (not a lone form).
+    const isContentPage = bodyTextLen > 600 || interactiveCount > 12;
+    if (!hasAnyHeading && isContentPage) {
+      out.push({ issueType:'noH1', severity:'medium', selector:null,
+        description:'Content page has no heading at all (no <h1>–<h6>, no role="heading") — add an <h1> as the primary page title for screen-reader navigation' });
+    }
   }
   if (!document.documentElement.hasAttribute('lang')) {
     out.push({ issueType:'missingLang', severity:'high', selector:'html',
@@ -60,6 +73,19 @@ viewportSensitive: false
   }
   for (const el of document.querySelectorAll('button, [role="button"]')) {
     if (out.length >= 20) break;
+    // Skip buttons that are not rendered — inside collapsed sidebars, hidden panels,
+    // or framework-internal ghost elements (BBox 0×0 = user never sees or interacts with it)
+    const br = el.getBoundingClientRect();
+    if (br.width === 0 && br.height === 0) continue;
+    // Also skip if any ancestor is display:none / visibility:hidden
+    let hidden = false;
+    let node = el.parentElement;
+    while (node && node !== document.documentElement) {
+      const s = getComputedStyle(node);
+      if (s.display === 'none' || s.visibility === 'hidden') { hidden = true; break; }
+      node = node.parentElement;
+    }
+    if (hidden) continue;
     const text = (el.innerText || '').trim();
     const aria = el.getAttribute('aria-label') || '';
     const title = el.getAttribute('title') || '';

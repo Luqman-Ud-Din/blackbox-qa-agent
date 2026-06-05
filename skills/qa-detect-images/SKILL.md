@@ -19,19 +19,42 @@ viewportSensitive: false
 () => {
   const out = [];
   const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+
+  // Returns true only if the element is actually rendered and visible to the user.
+  // Skips images inside collapsed sidebars, hidden navs, display:none containers,
+  // and elements parked entirely off-screen (negative coords / beyond the viewport).
+  const vw = innerWidth, vh = innerHeight;
+  const isRendered = el => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return false;
+    // Entirely outside the viewport box → user never sees it (e.g. collapsed sidebar
+    // logo at x:-228, or off-canvas drawer image past the right edge).
+    if (r.right <= 0 || r.left >= vw || r.bottom <= 0 || r.top >= vh) return false;
+    let node = el;
+    while (node && node !== document.documentElement) {
+      const s = getComputedStyle(node);
+      if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+      node = node.parentElement;
+    }
+    return true;
+  };
+
   for (const img of document.querySelectorAll('img')) {
     if (out.length >= 20) break;
     const src = (img.src || '').slice(0,100);
     const selector = `img[src="${src.slice(0,60)}"]`;
 
-    // 1. Missing alt
-    if (!img.hasAttribute('alt')) {
+    // 1. Missing alt — only on rendered images (hidden images are irrelevant to screen readers)
+    if (!img.hasAttribute('alt') && isRendered(img)) {
       out.push({ issueType:'missingAlt', severity:'medium', selector,
         description:`img element is missing the alt attribute entirely`, bbox: bb(img) });
     }
 
-    // 2. Broken image
+    // 2. Broken image — only flag if the image is actually rendered/visible.
+    // Hidden images (inside collapsed sidebar, display:none nav, etc.) are NOT flagged here —
+    // they may be intentional placeholders or off-screen variants never shown to the user.
     if (img.complete && img.naturalWidth === 0) {
+      if (!isRendered(img)) continue; // collapsed sidebar, hidden panel, off-screen — skip
       out.push({ issueType:'brokenImage', severity:'critical', selector,
         description:`Image failed to load: ${src}`, bbox: bb(img) });
       continue; // can't compute ratios without natural dimensions
@@ -40,6 +63,7 @@ viewportSensitive: false
     const r = img.getBoundingClientRect();
     if (img.naturalWidth === 0 || img.naturalHeight === 0) continue;
     if (r.width === 0 || r.height === 0) continue;
+    if (!isRendered(img)) continue; // off-screen / hidden — oversized/stretched are irrelevant if unseen
 
     // 3. Oversized (downloaded much larger than rendered)
     if (img.naturalWidth/r.width > 3) {

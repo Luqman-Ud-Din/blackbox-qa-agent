@@ -29,6 +29,7 @@
 const fs    = require('fs');
 const path  = require('path');
 const https = require('https');
+const { execFileSync } = require('child_process');
 const schema = require('./argus-schema.cjs');
 
 // ── Args ────────────────────────────────────────────────────────────────────
@@ -137,14 +138,27 @@ function buildBody(issue) {
 <p><em>Filed automatically by argus-qa (Run ID: ${escape(issue.runId)})</em></p>`;
 }
 
+// ── Resolve a screenshot path to an existing absolute path ─────────────────
+// The stored path may be: (a) absolute from a different install location,
+// (b) a plain filename with no directory, or (c) a correct relative path.
+// Strategy: try the stored path first; if missing, reconstruct from the
+// known canonical location PROJECT_ROOT/.tmp/{RUN_ID}/screenshots/{basename}.
+function resolveScreenshotPath(storedPath) {
+  if (!storedPath) return null;
+  const candidate1 = path.isAbsolute(storedPath)
+    ? storedPath
+    : path.join(PROJECT_ROOT, storedPath);
+  if (fs.existsSync(candidate1)) return candidate1;
+  // Fallback: rebuild from the basename alone
+  const candidate2 = path.join(PROJECT_ROOT, '.tmp', RUN_ID, 'screenshots', path.basename(storedPath));
+  return fs.existsSync(candidate2) ? candidate2 : null;
+}
+
 // ── Attach screenshot ──────────────────────────────────────────────────────
 async function attachScreenshot(bugId, screenshotPath) {
   if (!screenshotPath) return 'no-path';
-  // Path may be project-relative ('.tmp/xxx/...') or absolute
-  const absPath = path.isAbsolute(screenshotPath)
-    ? screenshotPath
-    : path.join(PROJECT_ROOT, screenshotPath);
-  if (!fs.existsSync(absPath)) return `file-missing:${absPath}`;
+  const absPath = resolveScreenshotPath(screenshotPath);
+  if (!absPath) return `file-missing:${path.basename(screenshotPath)}`;
 
   const fileName = path.basename(absPath);
   const buf      = fs.readFileSync(absPath);
@@ -220,6 +234,66 @@ async function fileBug(issue) {
   console.log(`  App:     ${APP}`);
   console.log(`  Run:     ${RUN_ID}\n`);
 
+  // Run annotation sweep first — stamps annotatedScreenshotPath into every JSONL
+  // before we read issues, so file-bugs never depends on the orchestrator having
+  // called annotate-cell.cjs during the audit (it often doesn't).
+  const annotateScript = path.join(__dirname, 'annotate-cell.cjs');
+  try {
+    const out = execFileSync(process.execPath, [annotateScript, RUN_ID], { encoding: 'utf8' });
+    console.log(`  [annotation] ${out.trim()}`);
+  } catch (e) {
+    if (e.status === 2) {
+      // Some base PNGs missing — annotated what it could, will fall back to base for the rest
+      console.log(`  [annotation] ${(e.stdout || '').trim()}`);
+    } else if (e.status !== 5 && e.status !== 3) {
+      console.log(`  [annotation] warning: ${e.message}`);
+    }
+  }
+
+  // Load registered skill names from skill-probes.json (built by bundle-probes.cjs).
+  // Any finding whose skill field is not in this set was invented by the model
+  // (hallucinated skill like "qa-detect-multi") and must be rejected before filing.
+  // ── FAIL CLOSED: the issueType/skill allowlist is the only thing standing
+  //    between fabricated findings and ADO. If skill-probes.json is missing we do
+  //    NOT "skip the filter and file everything" (the old behaviour that let 47 of
+  //    119 fabricated-issueType bugs reach ADO in run-005). We rebuild it; if it
+  //    still can't be produced, we ABORT — no gate means no filing.
+  const probesFile = path.join(PROJECT_ROOT, '.tmp', RUN_ID, 'skill-probes.json');
+  if (!fs.existsSync(probesFile)) {
+    console.log('  [skill-filter] skill-probes.json missing — rebuilding via bundle-probes.cjs');
+    try {
+      execFileSync(process.execPath, [path.join(__dirname, 'bundle-probes.cjs'), RUN_ID], { encoding: 'utf8' });
+    } catch (e) {
+      console.error(`  ✗ bundle-probes.cjs failed: ${e.message}`);
+    }
+  }
+  if (!fs.existsSync(probesFile)) {
+    console.error('\n  ✗ ABORT: skill-probes.json could not be produced. The anti-fabrication gate cannot run,');
+    console.error('    so filing would let invented issueTypes through to ADO. Fix bundle-probes.cjs and re-run.');
+    console.error('    (Filing nothing is correct here — a fake ticket is worse than a missing one.)\n');
+    process.exit(1);
+  }
+  const validSkills = new Set();
+  const issueTypesBySkill = new Map();   // skill name → Set of issueTypes it can actually emit
+  try {
+    const bundle = JSON.parse(fs.readFileSync(probesFile, 'utf8'));
+    (bundle.skills || []).forEach(s => {
+      validSkills.add(s.name);
+      if (Array.isArray(s.issueTypes) && s.issueTypes.length) {
+        issueTypesBySkill.set(s.name, new Set(s.issueTypes));
+      }
+    });
+    console.log(`  [skill-filter] ${validSkills.size} registered skills loaded`);
+    console.log(`  [issuetype-gate] ${issueTypesBySkill.size} skills have an issueType allowlist`);
+  } catch (e) {
+    console.error(`\n  ✗ ABORT: skill-probes.json is present but unparseable (${e.message}). Refusing to file without the gate.\n`);
+    process.exit(1);
+  }
+  if (validSkills.size === 0) {
+    console.error('\n  ✗ ABORT: skill-probes.json has 0 skills — the gate would pass everything. Refusing to file.\n');
+    process.exit(1);
+  }
+
   // Collect all issues using the schema-aware reader
   const allIssues = schema.readAllJsonl(ISSUES_DIR);
   console.log(`  Collected ${allIssues.length} raw issues from ${ISSUES_DIR}`);
@@ -240,17 +314,78 @@ async function fileBug(issue) {
   }
   console.log(`  Validated: ${valid.length} ok, ${invalid.length} rejected`);
 
-  // Deduplicate by issueType + route + viewportClass + browser
+  // Reject hallucinated skill names — findings from skills the model invented
+  // (e.g. "qa-detect-multi") instead of running real registered skills.
+  let afterSkillFilter = valid;
+  if (validSkills.size > 0) {
+    const hallucinated = valid.filter(i => !validSkills.has(i.skill));
+    afterSkillFilter   = valid.filter(i =>  validSkills.has(i.skill));
+    if (hallucinated.length > 0) {
+      const fakeSkills = [...new Set(hallucinated.map(i => i.skill))].join(', ');
+      console.log(`  ⚠ Rejected ${hallucinated.length} findings from unregistered skills: ${fakeSkills}`);
+    }
+    console.log(`  After skill filter: ${afterSkillFilter.length} real findings remain`);
+  }
+
+  // ── ISSUETYPE GATE (anti-fabrication) ────────────────────────────────────
+  // A worker must emit ONLY the issueTypes its skill's probe/Issues-table defines.
+  // Findings with an invented issueType (e.g. "elementExceedsViewport", which no
+  // skill emits) are model fabrications — reject them. This is the deterministic
+  // backstop for the qa-cell-worker "verbatim output" rule.
+  if (issueTypesBySkill.size > 0) {
+    const before = afterSkillFilter.length;
+    const fabricated = [];
+    afterSkillFilter = afterSkillFilter.filter(i => {
+      const allow = issueTypesBySkill.get(i.skill);
+      if (!allow) return true;                       // skill has no allowlist → don't gate
+      if (allow.has(i.issueType)) return true;
+      fabricated.push(i);
+      return false;
+    });
+    if (fabricated.length > 0) {
+      const byType = {};
+      for (const f of fabricated) byType[`${f.skill}:${f.issueType}`] = (byType[`${f.skill}:${f.issueType}`] || 0) + 1;
+      console.log(`  ⚠ Rejected ${fabricated.length} findings with FABRICATED issueTypes (skill cannot emit them):`);
+      for (const [k, n] of Object.entries(byType)) console.log(`      ${k}  ×${n}`);
+      console.log(`  After issuetype gate: ${afterSkillFilter.length} real findings remain (was ${before})`);
+    }
+  }
+
+  // Deduplicate — two passes:
+  // Pass 1: same issueType + route + viewportClass + browser (exact cell duplicate)
+  // Pass 2: same issueType + same description prefix across different routes
+  //         (e.g. same JS error firing on 10 pages → one ticket, routes listed in description)
   const seen = new Map();
+  const descSeen = new Map();
   const unique = [];
   let dups = 0;
-  for (const issue of valid) {
-    const key = [issue.issueType, issue.route, issue.viewportClass, issue.browser].join('|');
-    if (seen.has(key)) { dups++; continue; }
-    seen.set(key, true);
+  for (const issue of afterSkillFilter) {
+    // Pass 1 — exact cell duplicate
+    const cellKey = [issue.issueType, issue.route, issue.viewportClass, issue.browser].join('|');
+    if (seen.has(cellKey)) { dups++; continue; }
+    seen.set(cellKey, true);
+
+    // Pass 2 — same error across routes: key on issueType + first 80 chars of description
+    const descKey = issue.issueType + '|' + (issue.description || '').slice(0, 80);
+    if (descSeen.has(descKey)) {
+      // Merge this route into the winner's description instead of filing a new ticket
+      const winner = descSeen.get(descKey);
+      if (!winner._extraRoutes) winner._extraRoutes = [];
+      winner._extraRoutes.push(issue.route);
+      dups++;
+      continue;
+    }
+    descSeen.set(descKey, issue);
     unique.push(issue);
   }
-  console.log(`  Deduplicated: ${unique.length} unique (${dups} duplicates dropped)`);
+  // Append extra routes to merged tickets
+  for (const issue of unique) {
+    if (issue._extraRoutes && issue._extraRoutes.length > 0) {
+      issue.description += `\n\nAlso occurs on: ${issue._extraRoutes.join(', ')}`;
+      delete issue._extraRoutes;
+    }
+  }
+  console.log(`  Deduplicated: ${unique.length} unique (${dups} duplicates/merges dropped)`);
 
   // Sort by severity
   const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };

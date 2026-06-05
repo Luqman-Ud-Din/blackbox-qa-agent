@@ -39,14 +39,62 @@ Single passive `browser_evaluate`. Returns `[]` if no forms / inputs / errors fo
   const out = [];
   const skipTypes = new Set(['hidden','submit','reset','button','image','checkbox','radio']);
 
+  // Detect floating/contextual labels used by UI component libraries.
+  // These libraries position a <label> visually inside the input (looks like placeholder),
+  // which floats up on focus. The label IS there — just not always linked via for/id.
+  // Without this check, every MUI / Ant Design / Chakra / Vuetify input fires a false positive.
+  const hasContextualLabel = el => {
+    // 1. MUI: <FormControl class="MuiFormControl-root"><label class="MuiFormLabel-root">...</label>...<input>
+    const muiControl = el.closest('.MuiFormControl-root, .MuiTextField-root, .MuiInputBase-root');
+    if (muiControl) {
+      const lbl = muiControl.closest('.MuiFormControl-root, .MuiTextField-root');
+      if (lbl) {
+        const label = lbl.querySelector('.MuiFormLabel-root, .MuiInputLabel-root');
+        if (label && label.innerText.trim()) return true;
+      }
+    }
+    // 2. Ant Design: <Form.Item><label class="ant-form-item-label">...</label>...<input>
+    const antItem = el.closest('.ant-form-item');
+    if (antItem && antItem.querySelector('.ant-form-item-label label, .ant-form-item-label')) return true;
+    // 3. Chakra UI: <FormControl class="chakra-form-control"><FormLabel class="chakra-form__label">
+    const chakra = el.closest('.chakra-form-control');
+    if (chakra && chakra.querySelector('.chakra-form__label')) return true;
+    // 4. Vuetify: <v-text-field> renders <label class="v-label">
+    const vuetify = el.closest('.v-input, .v-field');
+    if (vuetify && vuetify.querySelector('.v-label, .v-field-label')) return true;
+    // 5. Angular Material: <mat-form-field><mat-label> or <label class="mdc-floating-label">
+    const matField = el.closest('mat-form-field, .mat-mdc-form-field, .mat-form-field');
+    if (matField && matField.querySelector('mat-label, .mdc-floating-label, .mat-mdc-floating-label')) return true;
+    // 6. Bootstrap 5 floating labels: <div class="form-floating"><input><label>
+    const bsFloat = el.closest('.form-floating');
+    if (bsFloat && bsFloat.querySelector('label')) return true;
+    // 7. PrimeReact / PrimeFaces: <span class="p-float-label"><input><label>
+    const prime = el.closest('.p-float-label, .p-inputwrapper');
+    if (prime && prime.querySelector('label')) return true;
+    // 8. Quasar: <q-input> renders <label class="q-field__label">
+    const quasar = el.closest('.q-field, .q-input');
+    if (quasar && quasar.querySelector('.q-field__label')) return true;
+    // 9. Generic: any wrapping element with a <label> that has text
+    const genericWrap = el.closest('.form-group, .form-field, .field, .input-wrapper, .input-group');
+    if (genericWrap) {
+      const lbl = genericWrap.querySelector('label');
+      if (lbl && lbl.innerText.trim()) return true;
+    }
+    return false;
+  };
+
   // 1. fieldWithoutLabel
   for (const el of document.querySelectorAll('input, textarea, select')) {
     if (out.length >= 16) break;
     if (el.type && skipTypes.has(el.type)) continue;
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
-    const labelled = (el.labels && el.labels.length > 0) || el.hasAttribute('aria-label') ||
-      el.hasAttribute('aria-labelledby') || el.title || el.placeholder;
+    const labelled = (el.labels && el.labels.length > 0) ||
+      el.hasAttribute('aria-label') ||
+      el.hasAttribute('aria-labelledby') ||
+      el.title ||
+      el.placeholder ||
+      hasContextualLabel(el);
     if (!labelled) {
       out.push({ issueType:'fieldWithoutLabel', severity:'high', selector:sel(el),
         description:'Form field has no label, aria-label, aria-labelledby, title, or placeholder', bbox: bb(el) });

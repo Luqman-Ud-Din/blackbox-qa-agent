@@ -31,12 +31,22 @@ viewportSensitive: true
   const vw = innerWidth, vh = innerHeight;
 
   // 1. fixedElementOverflow
+  // Only a real bug if the PAGE actually scrolls horizontally. A fixed/sticky panel
+  // positioned off the right edge (settings drawer, slide-in sidebar, off-canvas menu)
+  // is intentional and invisible — it does NOT create a horizontal scrollbar. Flagging
+  // it produces false "element extends beyond viewport" tickets on every page.
+  const docEl = document.documentElement;
+  const pageScrollsHorizontally = docEl.scrollWidth > docEl.clientWidth + 2;
   for (const el of document.querySelectorAll('*')) {
     if (out.length >= 20) break;
+    if (!pageScrollsHorizontally) break;             // no real horizontal scroll → nothing to flag
     const s = getComputedStyle(el);
     if (s.position !== 'fixed' && s.position !== 'sticky') continue;
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
+    // Skip elements that are ENTIRELY off-screen (a hidden drawer parked past the edge):
+    // left at/beyond the right edge, or fully left/above the viewport.
+    if (r.left >= vw - 2 || r.right <= 2 || r.top >= vh - 2 || r.bottom <= 2) continue;
     if (r.right > vw + 2 || r.bottom > vh + 2) {
       out.push({ issueType:'fixedElementOverflow', severity:'high', selector:sel(el),
         description:`${s.position} element extends beyond viewport: right=${Math.round(r.right)}px (vw=${vw}px)`, bbox: bb(el) });
