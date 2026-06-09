@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-affordance
+section: visual
 description: "Detects affordance UX failures: clickable elements that don't look clickable, hover-only revealed actions (dead on mobile/touch), missing focus indicators, cursor:default on interactives, text inputs without visible borders. Catches the 'I didn't know I could click that' bug class."
 model: haiku
 applyOn: all

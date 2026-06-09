@@ -1,5 +1,6 @@
 ---
 name: qa-detect-reflow
+section: responsiveness
 description: "WCAG 1.4.10 — detects content that requires horizontal scroll at 320×568, fixed-width elements, non-shrinking tables, and oversized images"
 model: haiku
 applyOn: [mobile]

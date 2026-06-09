@@ -1,8 +1,9 @@
 ---
 name: qa-detect-zoom-200
+section: responsiveness
 description: "WCAG 1.4.4 — verifies text and layout remain functional at 150% zoom (OS Display Scale approximation) and 200% zoom. Detects overflow, clipped text, and inaccessible content at both zoom levels."
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: true
 interactive: true

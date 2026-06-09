@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-whitespace
+section: visual
 description: "Detects layouts that waste horizontal space — forms rendered in less than 50% of available width, content blocks with huge empty side margins, main areas occupying less than 60% of viewport width on desktop. Catches the 'why is half my screen empty' bug class your Fee Navigator and Add Item screenshots show."
 model: haiku
 applyOn: all

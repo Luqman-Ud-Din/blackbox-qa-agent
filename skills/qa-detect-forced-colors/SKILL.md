@@ -1,8 +1,9 @@
 ---
 name: qa-detect-forced-colors
+section: accessibility
 description: "WCAG 1.4.11 — detects elements that rely solely on background color or images for distinction. Fail Windows High Contrast Mode (forced-colors: active)"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 ---
@@ -54,11 +55,43 @@ WCAG 1.4.11 (Non-text Contrast): icons and interactive controls must remain dist
   }
 
   // 2. Inline SVG icons with hardcoded fill/stroke that aren't CSS-driven
+  //
+  // Skip SVGs that are intentionally colored (legend swatches, chart data marks,
+  // logos, brand glyphs, status indicators) — for those, the color IS the meaning,
+  // and currentColor would destroy the semantic. False positives from those are
+  // the noisiest class of this check (see ApexCharts legend marker case).
+  const isChartOrLegendSvg = (svg) => {
+    // (a) SVG itself is a chart-library element
+    const svgCls = (svg.getAttribute('class') || '').toLowerCase();
+    if (/apexcharts|recharts|highcharts|echarts|chartjs|nvd3|vega|d3-|c3-|amcharts|plotly/.test(svgCls)) return true;
+    // (b) Any descendant has a chart-library class (covers svg.SvgjsSvg wrappers
+    //     used by ApexCharts which don't put the lib class on the svg root itself)
+    if (svg.querySelector('[class*="apexcharts"], [class*="recharts"], [class*="highcharts"], [class*="echarts"], [class*="chartjs"], [class*="nvd3"], [class*="amcharts"]')) return true;
+    // (c) SVG is inside a chart / legend / swatch container
+    const container = svg.closest(
+      '[class*="chart"], [class*="Chart"], [class*="graph"], [class*="Graph"], ' +
+      '[class*="legend"], [class*="Legend"], [class*="swatch"], [class*="Swatch"], ' +
+      '[class*="series"], [class*="Series"]'
+    );
+    if (container) return true;
+    // (d) SVG is a logo or brand glyph — colors are intentional
+    const logoContainer = svg.closest('[class*="logo"], [class*="Logo"], [class*="brand"], [class*="Brand"]');
+    if (logoContainer) return true;
+    // (e) SVG is a status/health indicator (color carries the semantic)
+    const statusContainer = svg.closest('[class*="status"], [class*="health"], [class*="indicator"], [class*="badge"], [class*="dot"]');
+    if (statusContainer && svg.getBoundingClientRect().width < 24) return true;
+    return false;
+  };
+
   let svgIconBugs = 0;
-  for (const svg of document.querySelectorAll('svg[class*="icon"], svg[width]:not([width="0"])')) {
+  // Tighter selector: only `svg[class*="icon"]` OR SVGs that look like UI icons
+  // (small, standalone, no chart context). The previous selector
+  // `svg[width]:not([width="0"])` matched EVERY sized SVG including chart series.
+  for (const svg of document.querySelectorAll('svg[class*="icon"], svg[class*="Icon"], i > svg, button > svg, a > svg')) {
     if (svgIconBugs >= 3) break;
     const r = svg.getBoundingClientRect();
     if (r.width === 0 || r.height === 0 || r.width > 80) continue;  // not an icon
+    if (isChartOrLegendSvg(svg)) continue;                          // chart/legend/logo — color is intentional
     const hardcodedFill = [...svg.querySelectorAll('[fill]:not([fill="currentColor"]):not([fill="none"]):not([fill="transparent"])')].length;
     if (hardcodedFill > 0) {
       svgIconBugs++;

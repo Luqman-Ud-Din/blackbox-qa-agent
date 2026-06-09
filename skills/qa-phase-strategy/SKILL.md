@@ -1,5 +1,6 @@
 ---
 name: qa-phase-strategy
+section: pipeline
 description: "Organises discovered routes into a three-phase audit plan ordered by risk — public → login flow → auth-gated"
 ---
 
@@ -15,21 +16,30 @@ You are the audit planner. Your job is to sort routes into the correct phases, e
 
 ## Phase Definitions
 
-### Phase 1 — Public Routes
+### Phase 1 — Public Routes (including the sign-in page)
 
-- **Routes**: All routes where `requiresAuth: false`
+- **Routes**: All routes where `requiresAuth: false` **plus the configured `loginPath`**
 - **Viewports**: All configured viewports
 - **Browsers**: All configured browsers
-- **Skills**: All passive detection skills + console error monitoring + network failure monitoring
-- **Goal**: Catch layout, overflow, accessibility, and JS errors on publicly accessible pages
+- **Skills**: All passive detection skills + interactive skills + console/network monitoring
+- **Goal**: Catch layout, overflow, accessibility, and JS errors on publicly accessible pages,
+  including the full sign-in form UI before any session exists
+
+🚨 **SIGN-IN PAGE MUST BE IN PHASE 1:**
+The login page (configured `loginPath`, e.g. `/authentication/signin`) is ALWAYS a Phase 1 cell.
+It must be audited **before the worker logs in** so probes see the real sign-in form — fields,
+labels, validation, placeholder text, and layout — not a post-login redirect to dashboard.
+If `qa-route-discovery` tagged the login route as `requiresAuth: true` (rare Angular SPA edge case),
+override it to `requiresAuth: false` here and place it in Phase 1.
 
 ### Phase 2 — Login Flow
 
-- **Routes**: The login route only (e.g. `/login`, `/signin`)
+- **Routes**: The login route only (e.g. `/login`, `/signin`) — same route as Phase 1
 - **Viewports**: All configured viewports
 - **Browsers**: `chromium` only (for speed)
-- **Skills**: Auth-flow functional tests (`qa-test-auth-flow`)
+- **Skills**: Auth-flow functional tests (`qa-test-auth-flow`) only
 - **Goal**: Verify credentials work before entering auth-gated territory. If Phase 2 login fails, Phase 3 is automatically skipped.
+- **Note**: Phase 2 cells run AFTER the worker logs in (to test the flow from a usable session). This is separate from Phase 1 which audits the login page UI in an unauthenticated state.
 
 ### Phase 3 — Auth-Gated Routes
 

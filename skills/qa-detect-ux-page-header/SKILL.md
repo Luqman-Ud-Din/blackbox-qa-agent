@@ -1,13 +1,14 @@
 ---
 name: qa-detect-ux-page-header
-description: "Detects page-header + breadcrumb layout problems — page title sitting before the home icon in the breadcrumb row, page title text duplicated as a breadcrumb item, home icon not the first breadcrumb item, page title using same style as breadcrumb. Goes beyond qa-detect-ux-breadcrumb which checks the breadcrumb itself in isolation."
+section: visual
+description: "Detects page-header layout problems — page title smaller than metric/content text (broken typographic hierarchy), page title sitting before the home icon in the breadcrumb row, page title text duplicated as a breadcrumb item, home icon not the first breadcrumb item, page title using same style as breadcrumb. Runs even when there is no breadcrumb. Goes beyond qa-detect-ux-breadcrumb which checks the breadcrumb itself in isolation."
 model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
 ---
 
-## What it catches — 5 issue types
+## What it catches — 6 issue types
 
 | issueType | severity | What |
 |---|---|---|
@@ -16,6 +17,7 @@ viewportSensitive: false
 | `breadcrumbHomeIconMidPath` | medium | The home (🏠) icon appears at position > 0 in the breadcrumb — should be the FIRST item, not in the middle |
 | `pageTitleNoH1` | low | Page title is rendered with `<div>` or `<span>` instead of `<h1>` — breaks semantic structure |
 | `pageTitleSameStyleAsBreadcrumb` | low | Page title font-size and weight match the breadcrumb items — no visual hierarchy between them |
+| `pageHeaderSmallerThanContent` | medium | The page title's font-size is noticeably smaller than other prominent text on the page (metric values, body text, button labels). Page title should sit at the TOP of the typographic hierarchy. Your Dashboard screenshot: "Dashboard" at ~18px while "1225" metric at ~48px and other headings ~16-18px |
 
 ## Probe (browser_evaluate)
 
@@ -52,6 +54,46 @@ viewportSensitive: false
     if (txt.length < 2 || txt.length > 80) continue;
     pageTitle = { el: t, text: txt };
     break;
+  }
+
+  // ── 0. Page header smaller than other content (runs WITHOUT a breadcrumb) ──
+  //     Page title font-size must sit at the TOP of the typographic hierarchy.
+  //     If any non-title prominent text is noticeably larger, flag it.
+  if (pageTitle) {
+    const titleCs = getComputedStyle(pageTitle.el);
+    const titleFs = parseFloat(titleCs.fontSize);
+    const titleFw = parseInt(titleCs.fontWeight) || 400;
+    // Scan candidate "prominent" text: headings, .stat / .metric / .value / .number / .count, button labels, h1-h3
+    const promptSel = 'h1, h2, h3, .stat, .metric, .value, .count, .number, .kpi, [class*="metric"], [class*="stat-value"], [class*="kpi"], [class*="count"], [class*="number"], button, .btn, [class*="card"] [class*="value"], [class*="card"] [class*="number"]';
+    const candidates = [...document.querySelectorAll(promptSel)].filter(visible);
+    let maxOtherFs = 0;
+    let maxOtherEl = null;
+    let maxOtherText = '';
+    for (const c of candidates) {
+      if (c === pageTitle.el || c.contains(pageTitle.el) || pageTitle.el.contains(c)) continue;
+      const txt = (c.innerText || '').trim();
+      if (txt.length < 1 || txt.length > 80) continue;
+      const cs = getComputedStyle(c);
+      const fs = parseFloat(cs.fontSize);
+      // Only consider "prominent" text — font-weight >= 500 OR digit-only metric
+      const fw = parseInt(cs.fontWeight) || 400;
+      const isMetric = /^[\d.,$%]+$/.test(txt);
+      if (!isMetric && fw < 500) continue;
+      // Skip elements smaller than the title — we want the largest "other" text
+      if (fs > maxOtherFs) {
+        maxOtherFs = fs;
+        maxOtherEl = c;
+        maxOtherText = txt;
+      }
+    }
+    // Flag when other content is >= 1.4× the title's font-size (title is clearly subordinate)
+    if (maxOtherEl && maxOtherFs >= titleFs * 1.4 && maxOtherFs - titleFs >= 8) {
+      out.push({
+        issueType: 'pageHeaderSmallerThanContent', severity: 'medium',
+        selector: sel(pageTitle.el), bbox: bb(pageTitle.el),
+        description: `Page title "${pageTitle.text.slice(0, 40)}" is ${titleFs}px (weight ${titleFw}) but other prominent text "${maxOtherText.slice(0, 30)}" on the page is ${maxOtherFs}px — ${(maxOtherFs/titleFs).toFixed(1)}× larger. Page title should be the LARGEST text in the visual hierarchy. Bump page title to at least ${Math.round(Math.max(maxOtherFs * 0.7, 24))}px or restructure so the metric values do not visually compete with the page title.`
+      });
+    }
   }
 
   // Find breadcrumb

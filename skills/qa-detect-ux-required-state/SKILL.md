@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-required-state
+section: visual
 description: "Detects ambiguous required-field state: required field with red border on initial page load (looks like error before user did anything), required-only-marked-by-asterisk (no programmatic indicator), empty required field with error class but no error message text, asterisk without legend."
 model: haiku
 applyOn: all

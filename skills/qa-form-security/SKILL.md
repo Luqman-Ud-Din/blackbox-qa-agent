@@ -1,5 +1,6 @@
 ---
 name: qa-form-security
+section: interactive
 description: "Consolidated form security skill. Owns CSRF tokens, autocomplete attributes on sensitive fields, and captcha presence/visibility. Replaces 3 overlapping security skills."
 model: haiku
 applyOn: all

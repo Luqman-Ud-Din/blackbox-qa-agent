@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-pagination
+section: visual
 description: "Detects pagination UX gaps: large table (488 rows total) with only 10-20 rows per page and no rows-per-page selector to increase the limit, pagination component without 'X total' count, page number buttons overflow the visible area, first/last page buttons missing. Catches the 'I have 488 students but the pager only shows 10 at a time' bug class."
 model: haiku
 applyOn: all

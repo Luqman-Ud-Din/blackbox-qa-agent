@@ -1,5 +1,6 @@
 ---
 name: qa-detect-sticky-scroll
+section: responsiveness
 description: "Tests sticky elements during scroll: they remain pinned, do not overlap content, and do not detach. Scrolls the page, captures state, restores."
 model: haiku
 applyOn: all

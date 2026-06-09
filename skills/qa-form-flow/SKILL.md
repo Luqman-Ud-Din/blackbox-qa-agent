@@ -1,5 +1,6 @@
 ---
 name: qa-form-flow
+section: interactive
 description: "Consolidated form-flow skill. Owns multi-step wizards (Next validation, Back data preservation, step indicator) AND conditional fields (toggle reveals/hides fields, no stuck states, revealed fields interactive). Replaces 2 overlapping skills."
 model: haiku
 applyOn: all

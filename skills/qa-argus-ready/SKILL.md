@@ -1,5 +1,6 @@
 ---
 name: qa-argus-ready
+section: pipeline
 description: "Argus QA readiness wizard; safe alias for qa-ready that avoids old qa-agent command collisions"
 ---
 

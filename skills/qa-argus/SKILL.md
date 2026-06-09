@@ -1,5 +1,6 @@
 ---
 name: qa-argus
+section: pipeline
 description: "Argus � autonomous UI auditor. USE THIS SKILL whenever the user wants to QA, audit, test, check, scan, review, or inspect a website / web app or any of its pages — or mentions UI bugs, broken layout, responsiveness, mobile/tablet/desktop issues, accessibility, forms, navigation, or cross-browser problems — or names an app or pastes a URL to test — or addresses Argus directly. Natural-language triggers include: 'audit my app', 'test undertakings', 'check https://… for bugs', 'run a QA audit', 'find UI bugs on my site', 'scan the dashboard', 'is my app responsive', and greetings like 'hi argus' / 'hey argus'. Argus autonomously crawls every route across browsers and viewports, detects layout/accessibility/form/network/responsiveness defects, captures annotated screenshots, and files bug tickets."
 ---
 
@@ -174,11 +175,11 @@ Claude reads each skill's `SKILL.md` at runtime — names only listed here. **Th
 
 - **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
 - **Detection (43):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-css-compat`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hidden-resources`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-video`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
-- **UX (28, expanded 2026-06-05):** `qa-detect-ux-actions`, `qa-detect-ux-active-state`, `qa-detect-ux-affordance`, `qa-detect-ux-alignment`, `qa-detect-ux-breadcrumb`, `qa-detect-ux-card-consistency`, `qa-detect-ux-card-usage`, `qa-detect-ux-feedback`, `qa-detect-ux-format-consistency`, `qa-detect-ux-hover`, `qa-detect-ux-icons`, `qa-detect-ux-input-width`, `qa-detect-ux-media-shape`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-overlap`, `qa-detect-ux-page-header`, `qa-detect-ux-pagination`, `qa-detect-ux-required-state`, `qa-detect-ux-selected-color-mix`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`, `qa-detect-ux-toolbar-consistency`, `qa-detect-ux-truncation`, `qa-detect-ux-whitespace`
+- **UX (33, expanded 2026-06-09):** `qa-detect-ux-actions`, `qa-detect-ux-active-state`, `qa-detect-ux-affordance`, `qa-detect-ux-alignment`, `qa-detect-ux-breadcrumb`, `qa-detect-ux-card-consistency`, `qa-detect-ux-card-usage`, `qa-detect-ux-chart-render`, `qa-detect-ux-cross-page-theme`, `qa-detect-ux-empty-state-conflict`, `qa-detect-ux-feedback`, `qa-detect-ux-format-consistency`, `qa-detect-ux-hover`, `qa-detect-ux-icons`, `qa-detect-ux-input-width`, `qa-detect-ux-media-shape`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-overlap`, `qa-detect-ux-page-header`, `qa-detect-ux-pagination`, `qa-detect-ux-required-state`, `qa-detect-ux-selected-color-mix`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`, `qa-detect-ux-toast-notification`, `qa-detect-ux-toolbar-consistency`, `qa-detect-ux-truncation`, `qa-detect-ux-whitespace`, `qa-detect-ux-widget-cramping`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
-- **Functional (13):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-states`, `qa-test-theme`, `qa-test-widgets`
+- **Functional (19):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-crud`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-export`, `qa-test-filter-accuracy`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-permissions`, `qa-test-states`, `qa-test-theme`, `qa-test-upload-e2e`, `qa-test-widgets`, `qa-test-workflow`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 102 skills**
+- **Total: 113 skills**
 
 ---
 
@@ -653,6 +654,12 @@ No permanent runner. The orchestrator drives the browser via Playwright MCP tool
 node "{project-root}/scripts/bundle-probes.cjs" "{runId}"
 ```
 
+🚨 **SECTION SCOPING (2026-06-09).** Every skill now carries a `section:` frontmatter tag — one of: `interactive`, `responsiveness`, `accessibility`, `visual`, `content`, `performance`. When the user's prompt asks for a specific section (e.g. "interactive only", "only interactive skills", "responsiveness only", "just accessibility", "content section"), you MUST pass `--section <name>` (comma-separate multiple) so ONLY that section's skills bundle and run — nothing else:
+```
+node "{project-root}/scripts/bundle-probes.cjs" "{runId}" --section interactive
+```
+This is what makes "interactive only" run ~10 functional skills in ~8–10 min instead of dragging in the ~14 responsiveness/perf detectors (web-vitals, breakpoint, fluid-sweep, zoom, rtl, dark-mode, sticky-scroll, modal-fit, dropdown-clip…) that made one page take 40 min. Map natural language → section: "interactive/functional"→`interactive`, "responsive/layout/viewport/breakpoint"→`responsiveness`, "a11y/accessibility"→`accessibility`, "typography/images/visual/ux"→`visual`, "grammar/spelling/content/copy"→`content`, "performance/web vitals/speed/errors"→`performance`. With NO section requested, omit `--section` (full audit). The coverage ledger, run-passive-probes, and coverage-gate all key off the bundled set, so a section run is fully self-consistent.
+
 Expected output: `✓ passive skills (have probe): 39   ✓ interactive (MCP-driven): 35`
 If this fails, HARD STOP — do not dispatch workers without the probe bundle.
 
@@ -705,7 +712,25 @@ This launches each engine, logs in once (reading creds from `secrets.json → ap
 
 Expected output: `✓ {cellId} … — 57/57 probes, N findings` for every cell. If a cell shows fewer than 57 probes, or the run errors, surface it — do NOT proceed to filing.
 
+🚨 **AWAIT BEFORE CONTINUING — DO NOT DISPATCH WORKERS UNTIL THIS EXITS.**
+`run-passive-probes.cjs` writes every `issues/{cellId}.jsonl` and `issues/{cellId}-probes.json`. Workers that start while the script is still running will clobber those files (confirmed failure in run qa-20260605-ghazali-001: cells 84-120 overwritten by stub 214-byte worker receipts). Wait for exit code 0 before proceeding.
+
+If the script exits non-zero: surface the error, do NOT proceed to workers or filing. The passive layer must be complete first.
+
 **After this step the passive layer is DONE and PROVEN** (coverage-gate Step 5.9.0 confirms 100% passive). Model workers (Step 5.1b) now drive **ONLY the 35 interactive skills** per cell — they MUST NOT re-run passive probes (already complete and verbatim). Each worker appends interactive findings to the existing `{cellId}.jsonl` and writes `{cellId}-interactive.json` (the interactive receipt). This split — deterministic passive + model-driven interactive — is what makes "all skills run, none fabricated" true by construction instead of by hoping the model complies.
+
+#### 5.0.C — Run the DETERMINISTIC interactive driver (MANDATORY when interactive skills are enabled — do this AFTER 5.0.B, BEFORE model workers)
+
+🚨 **This is the reliability fix (2026-06-09).** The model-driven interactive layer (Step 5.1b) is fragile: it drifts, stalls on context-compaction, falls back to passive-only, and re-logs-out on short-TTL/401 apps — which made one page take 40 min and silently dropped coverage. `run-interactive-probes.cjs` drives the **highest-value, most-common interactive checks in deterministic code** — search/sort/page-size **with real correctness assertions** (row order actually changed, results actually contain the term, footer-vs-DOM render cap) and form validation (whitespace-accepted, empty-submit-disabled). It is **auth-resilient** (auto re-login when a cell bounces to login) and **resumable** (`--resume` skips finished cells), so it never silently truncates.
+
+```
+node "{project-root}/scripts/run-interactive-probes.cjs" "{runId}" --browsers={engines} [--resume]
+```
+
+- Each finding it writes carries an `evidence` before/after measurement → **self-verifying, ~0 false positives** (it emits ONLY when the assertion holds).
+- It appends to `issues/{cellId}.jsonl` and writes `issues/{cellId}-interactive.json` marking `qa-test-data-controls` / `qa-form-validation` as `done`/`clean`/`skipped` with evidence.
+- **AWAIT exit before continuing.** Like 5.0.B, do not start model workers until this exits.
+- Model workers (Step 5.1b) then cover the REMAINING interactive skills it doesn't handle (states, widgets, keyboard, navigation, crud-with-cleanup, auth-flow, etc.) — and MUST NOT re-emit `qa-test-data-controls` / `qa-form-validation` findings (already done deterministically; re-emitting would duplicate). This deterministic-first split is what gets a typical page's interactive layer reliable AND fast (~3-4s for the data-control/validation checks vs minutes of model driving).
 
 #### 5.1 � Determine enabled skills + model routing
 
@@ -1324,22 +1349,13 @@ If `failedCount > 0`, the run is degraded but not aborted. Step 7's validation g
 
 #### 5.8 � Run summary
 
-After all cells, write `{project-root}/.tmp/{runId}/run-summary.json`:
-```json
-{
-  "cellsTotal": N,
-  "issuesTotal": N,
-  "critical": N, "high": N, "medium": N, "low": N,
-  "mode": "mcp|bash",
-  "screenshotsCaptured": N,
-  "screenshotsSkipped": N,
-  "degradedCells": ["cell-003", "cell-007"],
-  "expectedPairs": N,
-  "accountedPairs": N,
-  "coveragePct": N,
-  "degradedPairs": [{"cellId": "cell-012", "skill": "qa-detect-touch", "reason": "mobile 504 — no DOM"}]
-}
+🚨 **DO NOT hand-write `run-summary.json`.** Model-written summaries produce fabricated counts (confirmed: run qa-20260605-ghazali-001 claimed `rawFindings: 1206` when actual JSONL count was 771). Use the permanent script which counts real files:
+
 ```
+node "{project-root}/scripts/write-run-summary.cjs" "{runId}"
+```
+
+This reads every `issues/*.jsonl` line, counts `bugs-filed.jsonl` entries, and counts actual `screenshots/*.png` files — real numbers only.
 
 **Visibility check before continuing to Step 6:**
 If `screenshotsCaptured` is 0 but `issuesTotal` is greater than 0, the run is INCOMPLETE — the screenshot gate was bypassed somewhere. Print a loud warning to the terminal:
@@ -1367,6 +1383,8 @@ All downstream steps read from `{project-root}/.tmp/{runId}/issues/`.
 #### 5.9 — Coverage finish-gate (MANDATORY — the run may NOT complete until this passes)
 
 🚨 This is the gate that makes "nothing silently skipped" real. Run it after Step 5.8 and BEFORE Step 6. It cannot be skipped by reasoning — "I think coverage is fine" is not allowed; the EVIDENCE is the proof.
+
+**HARD PREREQUISITE for `file-bugs.cjs`:** `coverage-gate.cjs` MUST exit 0 before `scripts/file-bugs.cjs` is invoked. Calling `file-bugs.cjs` without a passing gate is FORBIDDEN — it files bugs against unverified coverage (confirmed bug: run qa-20260605-ghazali-001 jumped straight from workers to filing, gate never ran, 682/771 findings had wrong skill names and were rejected). Always: `coverage-gate.cjs` → exit 0 → `file-bugs.cjs`.
 
 ##### 5.9.0 — EVIDENCE GATE (deterministic, runs FIRST — model marks are NOT trusted)
 

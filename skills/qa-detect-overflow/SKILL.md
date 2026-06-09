@@ -1,5 +1,6 @@
 ---
 name: qa-detect-overflow
+section: responsiveness
 description: "Detects horizontal content overflow on any element"
 model: haiku
 applyOn: all

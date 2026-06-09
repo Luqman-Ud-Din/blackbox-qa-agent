@@ -1,8 +1,9 @@
 ---
 name: qa-test-data-controls
+section: interactive
 description: "Tests search (live/Enter/button-triggered), filter dropdowns, filter modals/panels, sort (aria-sort or plain header click), and pagination — applies each control and verifies the list actually changes"
 model: haiku
-applyOn: [mobile, tablet, desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true
@@ -62,6 +63,38 @@ Define **applySearch(value)** — set the input, then make the app actually RUN 
 
    After both iterations: if both produced identical "searchNoEffect" results → high confidence the search is broken globally; if they differ → log evidence per iteration.
 
+4.5. **Per-column scope discovery — find out which columns the search actually filters by:**
+
+This catches the bug class where the placeholder reads "Search budgets..." but the actual implementation only searches one or two columns (e.g. only Title, not Description). Without knowing, users type into the search and get confused when matches they expect don't appear.
+
+   a. Read the table's column headers (text from `thead th`). Skip non-content columns (Actions, Status, Date, Sr#, ID).
+   b. For the FIRST row, extract the value displayed in each remaining column.
+   c. For each (columnName, columnValue) pair (max 4 columns to bound cost):
+      - applySearch(columnValue) → `rowsAfter`, `firstRowText`.
+      - Record whether the original row is still visible (search matched this column) → `columnSearchable[columnName] = true`.
+      - If `rowsAfter === 0` AND the original value exactly matched the cell text → `columnSearchable[columnName] = false`.
+      - Reset search before next column.
+   d. Compute:
+      - `searchableColumns` = columns where `columnSearchable === true`
+      - `unsearchableColumns` = columns where `columnSearchable === false`
+   e. Read the search input placeholder/aria-label.
+      - If `unsearchableColumns.length >= 1` AND placeholder/aria-label does NOT name any of the unsearchable columns explicitly → emit:
+        ```json
+        {
+          "issueType": "searchScopeColumnRestricted",
+          "severity": "medium",
+          "evidence": {
+            "placeholder": "<the actual placeholder text>",
+            "searchableColumns": [...],
+            "unsearchableColumns": [...]
+          },
+          "description": "Search filters only <searchableColumns> but placeholder says '<text>' giving users no hint that <unsearchableColumns> are NOT searched. Update placeholder: 'Search by <searchableColumns join ', '>...'"
+        }
+        ```
+   f. Reset search to `''` at the end so subsequent tests see the full list.
+
+This complements the passive check `qa-detect-ux-feedback.searchPlaceholderTooGeneric` which flags ANY generic placeholder; this Phase 2 check confirms WHICH columns are actually searchable so the placeholder can be made specific.
+
 **Filter dropdowns / comboboxes — change EACH and verify the list reacts:**
 Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, or `[aria-haspopup="listbox"]` button that is **NOT** the pagination "items per page" control and **NOT** a sortable-column menu. Cap 4 filters per page.
 1. For each filter: record `rowsBefore`, `firstRowText`, and the current/default option label.
@@ -80,6 +113,26 @@ Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, 
 5. Wait 800ms → `rowsAfter` + `firstRowTextAfter`.
    - `rowsAfter === rowsBefore AND firstRowTextAfter === firstRowText AND rowsBefore > 1` → `filterModalNoEffect` (high) — criteria set + applied changed nothing (evidence: `{ control, value, rowsBefore, rowsAfter }`).
 6. **Reset:** reopen if needed and click a clear/reset control (`/clear|reset|remove all/i`); if none exists, `browser_navigate` back to the route to restore the unfiltered list.
+
+**Stale-results-after-empty-response check — runs once per applied filter:**
+
+This catches the "system says no records but old data still showing" bug class (your Students filter screenshot where `Record Not Found` toast appeared but the previous RIDA NASIR card stayed visible).
+
+After applying ANY filter step above (filter dropdown change, filter modal Apply, or search input), within 1500ms:
+
+1. Capture `resultsBefore` = list of currently-visible result-item text fingerprints (first 60 chars of each `tbody tr`, `[class*="card"]`, `[class*="list-item"]`, `[role="row"]` in the main content area, max 10).
+2. Wait 1200ms after the filter action.
+3. Look for an **empty-state signal** — any of:
+   - A visible toast/alert containing `record not found`, `no record`, `no data`, `no results`, `not found`, `0 results`, `nothing found` (case-insensitive)
+   - An inline message in the result area matching the same phrases
+   - Console log of HTTP 200 with `[]` body OR HTTP 404 to a data endpoint
+4. If empty-state signal present, capture `resultsAfter` = same fingerprint list.
+5. **Compare:**
+   - `resultsBefore.length >= 1 AND resultsAfter.length >= 1 AND resultsAfter ⊇ resultsBefore (any pre-filter row still visible)` → `staleResultsAfterEmptyResponse` (high). Evidence: `{ emptyStateText, resultsBefore: resultsBefore.slice(0, 3), resultsAfter: resultsAfter.slice(0, 3), filterApplied }`.
+6. Also flag duplicate toasts in the SAME observation:
+   - 2+ visible toasts sharing identical text within 1.5s window → `duplicateToastSimultaneous` (medium). Evidence: `{ toastText, count }`.
+
+This check is cheap (just an observation after each filter) — run it after the existing filterDropdownNoEffect / filterModalNoEffect / search checks, NOT as a separate iteration.
 
 **Sort — via aria-sort/button AND plain header click:**
 1. Locate a sortable header. Prefer `th[aria-sort], th button, [role="columnheader"][aria-sort], [data-testid*="sort"]`. **If none match, fall back to the first plain header cell** (`thead th, [role="columnheader"]`) — many tables (e.g. apps whose columns have no `aria-sort` attribute) sort on a bare header click.
@@ -157,12 +210,15 @@ Targets buttons / dropdowns whose label matches `/last\s+\d+\s+(days|weeks|month
 | searchMatchReturnsNothing | high | Searching a value visible on the page returned zero rows |
 | searchResultsContainNonMatchingRows | high | After search, visible rows do not contain the searched token (search filtered to wrong rows) |
 | searchTotalCountStale | medium | "X total" footer count does not update after a search reduces visible rows |
+| searchScopeColumnRestricted | medium | Search filters by only some columns, but the placeholder gives no hint about scope (e.g. "Search budgets..." while Description column is not searched) |
 | searchPickedValueNotInResults | high | Token picked from a visible row is missing from search results — search routed to wrong column or logic broken |
 | filterClearBroken | medium | Clearing the search/filter did not restore the full list |
 | filterDropdownNoEffect | high | Changing a filter dropdown/combobox to a different option did not change the list |
 | filterModalNoEffect | high | Setting a criterion in a filter modal/panel and applying it did not change the list |
 | filterButtonOpensNothing | medium | A filter button opened no panel/dropdown when clicked |
 | noEmptyState | medium | Zero-result filter shows no empty-state message |
+| staleResultsAfterEmptyResponse | high | Filter triggered an empty-state response ("Record Not Found" toast/message) but previously-displayed result items are still visible — system reports no data while showing old data |
+| duplicateToastSimultaneous | medium | Two or more visible toasts share identical text simultaneously — same notification fired multiple times without de-duplication |
 | sortNoEffect | medium | Clicking a sortable column header did not change row order |
 | paginationNoEffect | high | Clicking "Next" did not load the next page of results |
 | paginationPrevBroken | medium | "Previous" did not return to the prior page |

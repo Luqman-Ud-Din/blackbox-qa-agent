@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-active-state
+section: visual
 description: "Detects inconsistent active-state styling within the same navigation, tab group, or list — when one active item uses a background highlight and another uses only text color, users get confused about what's selected. Catches the 'two different active styles in the same menu' bug class."
 model: haiku
 applyOn: all

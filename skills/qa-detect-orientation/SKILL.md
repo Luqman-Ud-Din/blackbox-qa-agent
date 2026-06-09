@@ -1,5 +1,6 @@
 ---
 name: qa-detect-orientation
+section: responsiveness
 description: "Detects layout breakage in landscape orientation on mobile/tablet — swaps viewport dimensions and scans for overflow, cut-off content, and unusable navigation"
 model: haiku
 applyOn: [mobile, tablet]

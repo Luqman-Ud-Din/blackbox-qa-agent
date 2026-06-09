@@ -1,5 +1,6 @@
 ---
 name: qa-argus-setup
+section: pipeline
 description: "Argus QA first-run setup wizard; configures MCP, app settings, and Azure DevOps credentials"
 model: haiku
 ---

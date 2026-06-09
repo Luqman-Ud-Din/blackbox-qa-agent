@@ -1,5 +1,6 @@
 ---
 name: qa-detect-network-errors
+section: performance
 description: "Captures HTTP 4xx/5xx responses and failed requests during page load"
 model: haiku
 applyOn: all

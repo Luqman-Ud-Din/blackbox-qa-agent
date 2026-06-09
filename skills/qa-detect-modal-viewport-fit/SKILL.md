@@ -1,5 +1,6 @@
 ---
 name: qa-detect-modal-viewport-fit
+section: responsiveness
 description: "Tests open modals / dialogs: verify they fit within the viewport height, action buttons (Submit/Cancel) are reachable, and content scrolls internally rather than the modal overflowing"
 model: haiku
 applyOn: all
@@ -45,7 +46,11 @@ This skill detects already-open modals OR finds a modal trigger and opens one, t
     '[role="dialog"][aria-modal="true"]:not([aria-hidden="true"]), ' +
     '[role="alertdialog"]:not([aria-hidden="true"]), ' +
     '.modal.show, .modal[class*="open"], ' +
-    '[data-state="open"][role="dialog"]'
+    '[data-state="open"][role="dialog"], ' +
+    // Angular Material CDK overlay — attaches to document.body portal, not near the trigger
+    'mat-dialog-container, ' +
+    '.cdk-overlay-container [role="dialog"]:not([aria-hidden="true"]), ' +
+    '.cdk-overlay-pane mat-dialog-container'
   );
   for (const c of candidates) {
     const r = c.getBoundingClientRect();
@@ -103,9 +108,13 @@ This skill detects already-open modals OR finds a modal trigger and opens one, t
   });
   const hasInternalScroll = innerScrollers.length > 0;
 
-  // Find footer (last buttons row, .modal-footer, or last .button-group)
-  const footer = modal.querySelector('.modal-footer, [class*="modal-footer"], [class*="dialog-footer"]') ||
-                 modal.querySelector('[class*="actions"]:last-child, [class*="buttons"]:last-child');
+  // Find footer — includes Angular Material mat-dialog-actions
+  const footer = modal.querySelector(
+    'mat-dialog-actions, ' +
+    '.modal-footer, [class*="modal-footer"], [class*="dialog-footer"], ' +
+    '[class*="actions"]:last-child, [class*="buttons"]:last-child, ' +
+    '.cdk-overlay-pane mat-dialog-actions'
+  );
   let footerOffscreen = false;
   if (footer) {
     const fr = footer.getBoundingClientRect();

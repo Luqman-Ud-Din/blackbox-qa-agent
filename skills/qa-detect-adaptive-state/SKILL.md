@@ -1,8 +1,9 @@
 ---
 name: qa-detect-adaptive-state
+section: visual
 description: "Simulates adaptive media states (prefers-color-scheme: dark, prefers-reduced-motion: reduce, forced-colors: active, prefers-contrast: more) within a single cell via browser_evaluate + matchMedia event synthesis. Detects bugs in each adaptive state without spawning separate cells."
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true
@@ -74,7 +75,7 @@ Returns: { textContrasts: [...], animationCount, parallaxCount, focusVisible, ic
 ```
 1. browser_evaluate(probe.simulateReducedMotion)
 2. browser_wait_for({ time: 300 })
-3. reducedState = browser_evaluate(probe.snapshotAnimationState)
+3. reducedState = browser_evaluate(probe.snapshotAnimationState)  // dedicated probe — checks animation durations post-injection
 4. Compare:
    - reducedState.animationCount > 0 → emit motionIgnoresReducedPref (high)
    - reducedState.parallaxCount > 0 → emit parallaxOnReducedMotion
@@ -157,13 +158,24 @@ Returns: { textContrasts: [...], animationCount, parallaxCount, focusVisible, ic
 ```
 
 ```js
-// probe.simulateDarkMode — inject color-scheme + dispatch matchMedia change event
+// probe.simulateDarkMode
+// NOTE: Object.defineProperty on a matchMedia instance CANNOT override the prototype getter in modern browsers.
+// Instead we use CSS injection — inject a style that approximates dark-mode variable overrides,
+// and set the html[data-theme] attribute that many Angular apps listen to.
 () => {
-  document.documentElement.style.colorScheme = 'dark';
-  // Force re-evaluation of matchMedia by triggering a synthetic event
-  const mq = window.matchMedia('(prefers-color-scheme: dark)');
-  Object.defineProperty(mq, 'matches', { value: true, configurable: true });
-  mq.dispatchEvent(new MediaQueryListEvent('change', { matches: true, media: '(prefers-color-scheme: dark)' }));
+  document.documentElement.setAttribute('data-theme', 'dark');
+  document.documentElement.setAttribute('data-argus-dark', '1');
+  const style = document.createElement('style');
+  style.id = 'argus-dark-mode';
+  style.textContent = `
+    [data-argus-dark="1"] { color-scheme: dark !important; }
+  `;
+  document.head.appendChild(style);
+  // Dispatch matchMedia event for listeners — some Angular apps listen for this
+  try {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.dispatchEvent(new MediaQueryListEvent('change', { matches: true, media: '(prefers-color-scheme: dark)' }));
+  } catch (_) {}
   return { simulated: true };
 }
 ```
@@ -171,33 +183,127 @@ Returns: { textContrasts: [...], animationCount, parallaxCount, focusVisible, ic
 ```js
 // probe.restoreColorScheme
 () => {
-  document.documentElement.style.colorScheme = '';
-  const mq = window.matchMedia('(prefers-color-scheme: dark)');
-  Object.defineProperty(mq, 'matches', { value: false, configurable: true });
-  mq.dispatchEvent(new MediaQueryListEvent('change', { matches: false, media: '(prefers-color-scheme: dark)' }));
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-argus-dark');
+  const s = document.getElementById('argus-dark-mode');
+  if (s) s.remove();
   return { restored: true };
 }
 ```
 
 ```js
-// probe.simulateReducedMotion + probe.restoreReducedMotion
-// (similar pattern: override matchMedia.matches for '(prefers-reduced-motion: reduce)')
+// probe.simulateReducedMotion
+// Injects CSS that makes all animations/transitions near-instant — same behavioral effect as the media query.
+() => {
+  const existing = document.getElementById('argus-reduced-motion');
+  if (existing) return { alreadyInstalled: true };
+  const style = document.createElement('style');
+  style.id = 'argus-reduced-motion';
+  style.textContent = `
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  `;
+  document.head.appendChild(style);
+  // Dispatch event for Angular listeners
+  try {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    mq.dispatchEvent(new MediaQueryListEvent('change', { matches: true, media: '(prefers-reduced-motion: reduce)' }));
+  } catch (_) {}
+  return { simulated: true };
+}
 ```
 
 ```js
-// probe.simulateForcedColors + probe.restoreForcedColors
-// (override matchMedia.matches for '(forced-colors: active)')
-// ALSO: inject CSS that approximates Windows High Contrast Mode
+// probe.restoreReducedMotion
 () => {
-  document.documentElement.style.colorScheme = 'dark';
+  const s = document.getElementById('argus-reduced-motion');
+  if (s) s.remove();
+  return { restored: true };
+}
+```
+
+```js
+// probe.snapshotAnimationState — dedicated probe for reduced-motion step (Step 3)
+() => {
+  const animations = document.getAnimations ? document.getAnimations() : [];
+  const running = animations.filter(a => a.playState === 'running' && a.effect);
+  const longRunning = running.filter(a => {
+    const dur = a.effect && a.effect.getTiming ? a.effect.getTiming().duration : 0;
+    return typeof dur === 'number' && dur > 10; // > 10ms means not instantly-done
+  });
+  const parallaxEls = [...document.querySelectorAll('*')].filter(el => {
+    const s = getComputedStyle(el);
+    return s.backgroundAttachment === 'fixed' || (s.transform !== 'none' && /translate3d|translateZ/.test(s.transform));
+  }).length;
+  return {
+    animationCount: longRunning.length,
+    parallaxCount: Math.min(parallaxEls, 10)
+  };
+}
+```
+
+```js
+// probe.simulateForcedColors — injects CSS approximating Windows High Contrast Mode (forced-colors: active)
+() => {
+  const existing = document.getElementById('argus-forced-colors');
+  if (existing) return { alreadyInstalled: true };
   const style = document.createElement('style');
   style.id = 'argus-forced-colors';
   style.textContent = `
-    * { background-image: none !important; }
-    *:focus { outline: 2px solid CanvasText !important; }
+    * {
+      background-image: none !important;
+      box-shadow: none !important;
+    }
+    *:focus {
+      outline: 2px solid ButtonText !important;
+    }
+    img, svg { opacity: 1 !important; }
   `;
   document.head.appendChild(style);
   return { simulated: true };
+}
+```
+
+```js
+// probe.restoreForcedColors
+() => {
+  const s = document.getElementById('argus-forced-colors');
+  if (s) s.remove();
+  return { restored: true };
+}
+```
+
+```js
+// probe.simulateHighContrast — inject maximum contrast CSS approximation
+() => {
+  const existing = document.getElementById('argus-high-contrast');
+  if (existing) return { alreadyInstalled: true };
+  const style = document.createElement('style');
+  style.id = 'argus-high-contrast';
+  style.textContent = `
+    * {
+      filter: contrast(200%) !important;
+    }
+    *:focus {
+      outline: 3px solid #ff0 !important;
+      outline-offset: 2px !important;
+    }
+  `;
+  document.head.appendChild(style);
+  return { simulated: true };
+}
+```
+
+```js
+// probe.restoreHighContrast
+() => {
+  const s = document.getElementById('argus-high-contrast');
+  if (s) s.remove();
+  return { restored: true };
 }
 ```
 
@@ -232,13 +338,13 @@ Returns: { textContrasts: [...], animationCount, parallaxCount, focusVisible, ic
 
 ```js
 // probe.restoreAllAdaptiveStates — final cleanup, idempotent
+// Removes ALL injected style tags; resets data attributes
 () => {
-  document.documentElement.style.colorScheme = '';
-  const inject = document.getElementById('argus-forced-colors');
-  if (inject) inject.remove();
-  // Reset matchMedia overrides (re-query to clear synthetic state)
-  for (const q of ['(prefers-color-scheme: dark)', '(prefers-reduced-motion: reduce)', '(forced-colors: active)', '(prefers-contrast: more)']) {
-    try { window.matchMedia(q); } catch (_) {}
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-argus-dark');
+  for (const id of ['argus-dark-mode', 'argus-reduced-motion', 'argus-forced-colors', 'argus-high-contrast']) {
+    const el = document.getElementById(id);
+    if (el) el.remove();
   }
   return { restored: true };
 }

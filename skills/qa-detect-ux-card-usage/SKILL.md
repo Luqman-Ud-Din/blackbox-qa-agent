@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-card-usage
+section: visual
 description: "Detects illogical use of the card pattern: a giant card containing only a single small input (your Search-only card), card with > 70% empty space relative to content, cards nested 3+ levels deep, card with substantial content but no heading, card heading separated from content by big gap."
 model: haiku
 applyOn: all

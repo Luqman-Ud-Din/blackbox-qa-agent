@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-alignment
+section: visual
 description: "Detects vertical baseline / inline alignment issues: breadcrumb items at different baselines, label not aligned with its input, icon not aligned with adjacent text, sibling buttons in a row with different heights, table cells in same row with mismatched vertical centers, form action group not aligned to the same side."
 model: haiku
 applyOn: all

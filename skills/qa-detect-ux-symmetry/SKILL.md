@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-symmetry
+section: visual
 description: "Measures layout symmetry — left vs right padding of containers, card-row alignment, primary-section balance. Catches visual asymmetry that users see immediately (e.g. content offset to one side, cards with mismatched edges) but no other skill measures. Deterministic, no Sonnet."
 model: haiku
 applyOn: all

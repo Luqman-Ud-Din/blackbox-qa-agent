@@ -1,5 +1,6 @@
 ---
 name: qa-detect-hover-touch
+section: responsiveness
 description: "Detects :hover CSS rules that aren't wrapped in @media (hover: hover) — on touch devices these styles get 'stuck' after a tap, leaving buttons/links highlighted indefinitely"
 model: haiku
 applyOn: [mobile, tablet]

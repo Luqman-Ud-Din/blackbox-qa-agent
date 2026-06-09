@@ -1,5 +1,6 @@
 ---
 name: qa-route-discovery
+section: pipeline
 description: "Discovers routes via 7 harvest strategies (anchors, router attrs, history intercept, hash routes, JS bundle string mining, click-based nav, sitemap+robots). Classifies public vs auth-gated. Detects tabs via accessibility snapshot + Sonnet (catches MUI/Bootstrap/Radix tabs that lack role=tab). Crawls list→detail rows, CTA buttons, modal-as-route patterns, and edge-state pages (404). Works on any SPA framework. ~98% route recall on a single-session crawl."
 model: sonnet
 ---

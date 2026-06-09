@@ -1,5 +1,6 @@
 ---
 name: qa-preflight
+section: pipeline
 description: "Verifies the minimum environment needed to run the audit. Skips checks that don't apply to the chosen browser bridge."
 model: haiku
 ---

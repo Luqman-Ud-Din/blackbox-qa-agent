@@ -1,8 +1,9 @@
 ---
 name: qa-test-keyboard
+section: interactive
 description: "Tests tab order, focus ring visibility, and focus trap detection"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true

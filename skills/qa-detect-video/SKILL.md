@@ -1,5 +1,6 @@
 ---
 name: qa-detect-video
+section: visual
 description: "Detects unresponsive <video> elements and non-responsive YouTube/Vimeo iframe embeds: missing max-width, container overflow, no controls, no aspect-ratio wrapper on embeds"
 model: haiku
 applyOn: all

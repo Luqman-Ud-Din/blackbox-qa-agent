@@ -1,5 +1,6 @@
 ---
 name: qa-detect-viewport-meta
+section: responsiveness
 description: "Detects missing or harmful viewport meta tag — wrong viewport breaks every mobile layout, and user-scalable=no fails WCAG 1.4.4"
 model: haiku
 applyOn: all

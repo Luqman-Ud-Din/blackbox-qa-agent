@@ -1,8 +1,9 @@
 ---
 name: qa-test-theme
+section: interactive
 description: "Tests dark/light theme toggle effect and persistence after page reload"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true

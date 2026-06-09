@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-toolbar-consistency
+section: visual
 description: "Detects inconsistencies inside button groups / toolbars: some buttons have shadow, others don't (icon-only have shadow, text buttons don't), mixed border-radius, mixed padding, mixed sizes, mixed casing of labels. Catches the 'buttons in the same toolbar look like different design systems' bug class."
 model: haiku
 applyOn: all

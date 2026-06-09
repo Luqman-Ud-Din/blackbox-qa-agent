@@ -1,5 +1,6 @@
 ---
 name: qa-detect-reduced-motion
+section: accessibility
 description: "WCAG 2.3.3 — detects animations/transitions that are not gated by @media (prefers-reduced-motion: reduce). Vestibular-disorder users get sick from motion."
 model: haiku
 applyOn: all

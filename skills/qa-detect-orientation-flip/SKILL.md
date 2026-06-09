@@ -1,5 +1,6 @@
 ---
 name: qa-detect-orientation-flip
+section: responsiveness
 description: "Tests TRUE orientation rotation via browser_resize (swap width/height). Detects layout bugs that appear in landscape, state loss across rotation, and missing orientationchange event handling."
 model: haiku
 applyOn: [mobile, tablet]
@@ -65,7 +66,7 @@ This skill runs ONLY on mobile and tablet cells. For each route, it tests the po
     - Any overflow finding in landscapeFindings NOT in portraitFindings → emit landscapeOverflow (high)
     - Primary CTA was visible in portrait but vh.bottom in landscape > vh → emit landscapeContentHidden (high)
     - portraitFormValue ≠ landscapeFormValue → emit orientationLosesState (high)
-    - landscapeHasResizeListener.hasListener is false AND page has @media(orientation:landscape) rules → emit orientationNoHandler (low)
+    - landscapeHasResizeListener.hasOrientationCSS is false AND page has @media(orientation:landscape) rules → emit orientationNoHandler (low)
 ```
 
 ### Step 4 — Restore portrait (MANDATORY)

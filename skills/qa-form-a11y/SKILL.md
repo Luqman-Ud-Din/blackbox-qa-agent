@@ -1,5 +1,6 @@
 ---
 name: qa-form-a11y
+section: interactive
 description: "Consolidated form accessibility skill. Owns labels, aria, fieldset legend, error announcement, required-field indication, focus order, password show/hide. Replaces qa-detect-form-a11y plus a11y-portions of qa-detect-forms."
 model: haiku
 applyOn: all

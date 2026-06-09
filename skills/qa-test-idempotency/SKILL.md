@@ -1,8 +1,9 @@
 ---
 name: qa-test-idempotency
+section: interactive
 description: "Tests that double-clicking submit does not allow duplicate form submissions"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true

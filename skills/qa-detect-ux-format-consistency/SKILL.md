@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-format-consistency
+section: visual
 description: "Detects mixed display formats for the same kind of data on a single page: date formats (5/6/2026 vs 2026-06-05 vs Jun 5 2026), currency formats (PKR 93M vs Rs. 93,000,000 vs $93M), number formats (1,000 vs 1.000 vs 1k), time formats (17:17 vs 5:17 PM), phone formats. Catches the 'why is the same data shown three different ways' bug class."
 model: haiku
 applyOn: all

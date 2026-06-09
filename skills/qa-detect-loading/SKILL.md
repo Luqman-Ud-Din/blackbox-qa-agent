@@ -1,5 +1,6 @@
 ---
 name: qa-detect-loading
+section: performance
 description: "Detects loading spinners stuck 3s after networkidle, blank pages, and 404/error content even when HTTP returned 200 (SPA routing failures)"
 model: haiku
 applyOn: all

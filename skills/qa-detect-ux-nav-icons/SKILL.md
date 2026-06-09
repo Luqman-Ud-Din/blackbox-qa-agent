@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-nav-icons
+section: visual
 description: "Detects nav/sidebar/tab consistency issues: icons mixed with iconless items, icon size variance across siblings, icon style mix (filled/outlined/colored), label-icon vertical misalignment, missing active-state indicator, label truncation. Catches the 'sidebar looks sloppy' bug class."
 model: haiku
 applyOn: all

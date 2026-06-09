@@ -1,5 +1,6 @@
 ---
 name: qa-detect-console-errors
+section: performance
 description: "Captures console errors and uncaught JS exceptions during page load"
 model: haiku
 applyOn: all

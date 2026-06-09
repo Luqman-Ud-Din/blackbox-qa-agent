@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-breadcrumb
+section: visual
 description: "Detects breadcrumb UX problems: parent name same as current page (Students > Students), missing home/root link, only one item (not a breadcrumb), separator missing/inconsistent, current page is a link (should be plain text), no aria-label for nav landmark."
 model: haiku
 applyOn: all
@@ -65,18 +66,7 @@ viewportSensitive: false
 
     if (items.length === 0) continue;
 
-    // ── 1. Single-item breadcrumb (not a breadcrumb) ──────────────────
-    if (singleFlagged < 1 && items.length === 1) {
-      singleFlagged++;
-      out.push({
-        issueType: 'breadcrumbSingleItem', severity: 'low',
-        selector: sel(bc), bbox: bb(bc),
-        description: `Breadcrumb container has only 1 item ("${(items[0].innerText || '').trim().slice(0, 30)}"). That's a page heading, not a breadcrumb.`
-      });
-      continue;
-    }
-
-    // ── 2. Duplicate consecutive segments ─────────────────────────────
+    // ── Duplicate consecutive segments (REAL: "Students > Students") ───
     if (dupFlagged < 2) {
       for (let i = 1; i < items.length; i++) {
         const a = (items[i-1].innerText || '').trim().toLowerCase();
@@ -93,23 +83,7 @@ viewportSensitive: false
       }
     }
 
-    // ── 3. Missing home/root ──────────────────────────────────────────
-    if (homeFlagged < 1 && items.length >= 2) {
-      const firstText = (items[0].innerText || '').trim().toLowerCase();
-      const firstIsHome = /\b(home|dashboard|main|root)\b/.test(firstText) ||
-                         items[0].querySelector('svg[class*="home"], i.fa-home, i.material-icons') ||
-                         items[0].getAttribute('aria-label')?.toLowerCase().includes('home');
-      if (!firstIsHome) {
-        homeFlagged++;
-        out.push({
-          issueType: 'breadcrumbMissingHome', severity: 'low',
-          selector: sel(bc), bbox: bb(bc),
-          description: `Breadcrumb starts with "${firstText.slice(0, 30)}" — no Home/Dashboard link as the first item. Users have no quick way back to the root.`
-        });
-      }
-    }
-
-    // ── 4. Current page is a link ─────────────────────────────────────
+    // ── Current page is a link (REAL: clicking reloads current page) ───
     if (currentLinkFlagged < 2) {
       const last = items[items.length - 1];
       const isLink = last.tagName === 'A' || (last.querySelector && last.querySelector('a[href]'));
@@ -127,41 +101,6 @@ viewportSensitive: false
       }
     }
 
-    // ── 5. Separator inconsistency ────────────────────────────────────
-    if (sepFlagged < 1) {
-      const fullText = (bc.innerText || '');
-      const separators = new Set();
-      if (/>/.test(fullText)) separators.add('>');
-      if (/›/.test(fullText)) separators.add('›');
-      if (/→|⇒/.test(fullText)) separators.add('→');
-      if (/\//.test(fullText) && items.length > 1) {
-        // Check if / appears as separator (between item texts)
-        const between = fullText.replace(/[^a-zA-Z0-9>›→⇒\/]/g, '');
-        if (between.includes('/')) separators.add('/');
-      }
-      if (separators.size >= 2) {
-        sepFlagged++;
-        out.push({
-          issueType: 'breadcrumbSeparatorInconsistent', severity: 'low',
-          selector: sel(bc), bbox: bb(bc),
-          description: `Breadcrumb mixes separators: ${[...separators].join(', ')}. Use one separator character consistently.`
-        });
-      }
-    }
-
-    // ── 6. No landmark ────────────────────────────────────────────────
-    if (landmarkFlagged < 1) {
-      const hasAriaLabel = bc.getAttribute('aria-label');
-      const hasRole = bc.getAttribute('role') === 'navigation' || bc.tagName === 'NAV';
-      if (!hasRole || !hasAriaLabel) {
-        landmarkFlagged++;
-        out.push({
-          issueType: 'breadcrumbNoLandmark', severity: 'low',
-          selector: sel(bc), bbox: bb(bc),
-          description: `Breadcrumb missing role="navigation" + aria-label="breadcrumb" (or <nav> wrapper). Screen-reader users can't identify it as a navigation landmark.`
-        });
-      }
-    }
   }
 
   return out;

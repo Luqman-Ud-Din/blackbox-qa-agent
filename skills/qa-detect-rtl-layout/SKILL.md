@@ -1,8 +1,9 @@
 ---
 name: qa-detect-rtl-layout
+section: responsiveness
 description: "Switches the document to RTL (dir='rtl') and detects layout breakage — overflow, mirrored asymmetry, and non-logical CSS properties that don't flip"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: true
 interactive: true

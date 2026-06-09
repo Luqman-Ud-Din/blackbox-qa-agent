@@ -1,5 +1,6 @@
 ---
 name: qa-detect-fluid-sweep
+section: responsiveness
 description: "Resize-sweeps the page across a range of widths (incl. in-between 600/900/1100 and extremes 320/1920) to catch fluid-layout breaks that only happen BETWEEN standard breakpoints"
 model: haiku
 applyOn: all

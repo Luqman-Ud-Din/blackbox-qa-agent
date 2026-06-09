@@ -1,5 +1,6 @@
 ---
 name: qa-detect-viewport-units
+section: responsiveness
 description: "Detects 100vh-not-dvh (content clipped under the mobile address bar) and retina-blurry raster images (natural resolution < 2x render, no srcset) — pixel-density + viewport-unit responsiveness"
 model: haiku
 applyOn: [mobile]

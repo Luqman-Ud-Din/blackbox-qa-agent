@@ -1,197 +1,249 @@
 ---
 name: qa-detect-visual-regression
-description: "Compares full-page and per-component screenshots to a stored baseline using perceptual hash (pHash). Flags visual drift per (route, viewport, browser). First audit establishes baseline. Catches font fallbacks, icon swaps, color drift, layout shifts that DOM probes cannot see."
+section: visual
+description: "Compares visual snapshots to a stored baseline using a DOM-sampled perceptual hash computed via browser_evaluate + Canvas API. No external npm packages, no scripts/phash.cjs required. First audit establishes baseline; subsequent audits detect visual drift. Catches font fallbacks, color drift, layout shifts."
 model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
 interactive: false
-cacheVersion: "1.0.0"
-ownership: "exclusive: any visual regression finding (vs prior run baseline) belongs to this skill. Other skills detect structural bugs in current state."
+cacheVersion: "2.0.0"
+ownership: "exclusive: any visual regression finding (vs prior run baseline) belongs to this skill."
 ---
 
-# qa-detect-visual-regression — Baseline pHash Diff
+# qa-detect-visual-regression — Browser-Based Perceptual Hash (MCP-native)
 
-Captures full-page + per-component screenshots, computes 64-bit perceptual hash, compares to stored baseline at `.claude/visual-baseline/{route-slug}-{viewport}-{browser}.json`. On Hamming distance > threshold, emits `visualRegression`.
+Computes a 64-bit visual hash of the current viewport using the Canvas API inside `browser_evaluate`. No `sharp`, no `phash.cjs`, no npm packages needed. Compares to stored baseline at `.claude/visual-baseline/`.
 
 ## What it checks (4 issue types)
 
 | Issue type | Severity | What it catches |
 |---|---|---|
-| `visualRegression` | medium | Full-page pHash differs from baseline by > 8 bits (significant visual change) |
-| `componentRegression` | medium | Specific component (nav, hero, footer) pHash differs from baseline |
-| `visualBaselineCreated` | info | First-run only — baseline established, no finding to fix |
-| `visualBaselineCorrupt` | low | Baseline file exists but is malformed/unreadable — re-creating |
+| `visualRegression` | medium | Full-viewport hash differs from baseline by > 8 bits (significant visual change) |
+| `componentRegression` | medium | Key component (nav, hero, footer) region hash differs from baseline |
+| `visualBaselineCreated` | info | First-run only — baseline established, no fix needed |
+| `visualBaselineCorrupt` | low | Baseline file exists but is malformed — re-creating |
 
 ## Self-skip conditions
 
 - If `customize.toml → [visual_regression].enabled = false` → skip
-- If the cell is currently capturing `--full-audit` flag → skip (baseline regeneration in progress)
-- If running in `--dry-run` AND no baseline exists → create baseline, do not emit findings
+- If baseline directory is missing AND running in `--dry-run` → create baseline silently, emit no findings
 
 ## Storage layout
 
 ```
 {project-root}/.claude/visual-baseline/
-├── home-mobile-chromium.json       ← pHash + metadata
-├── home-mobile-chromium.png        ← actual baseline image (for visual diff overlay)
-├── home-desktop-chromium.json
-├── login-mobile-chromium.json
-└── ... (one set per route × viewport × browser)
+├── home-mobile-chromium.json       ← hash + metadata
+├── login-desktop-chromium.json
+└── ... (one file per route × viewport × browser)
 ```
 
-`.claude/visual-baseline/` MUST be gitignored — baselines are environment-specific.
+`.claude/visual-baseline/` should be gitignored — baselines are environment-specific.
 
 ## Orchestrator flow
 
-### Step 1 — Take fullPage screenshot
+### Step 1 — Compute full-viewport hash
 
-```js
-browser_take_screenshot({
-  path: `{runDir}/screenshots/{cell.id}-vr-fullpage.png`,
-  fullPage: true,    // CRITICAL — captures below-fold content
-  type: 'png',
-  omitBackground: false
+```
+fullHash = browser_evaluate(probe.computeVisualHash, {
+  gridW: 16,
+  gridH: 16,
+  regionSelector: null   // null = full viewport
 })
+// Returns { hash: "0x4c81abef2c40df88", sampleCount: 256, avgBrightness: 142 }
 ```
 
-### Step 2 — Take per-component screenshots
+### Step 2 — Compute component hashes
 
-For each well-known component visible on the page, take element screenshots:
+For each well-known component (if visible):
 
-```js
-const components = [
-  { name: 'nav',     selector: 'nav, header[role="banner"]' },
-  { name: 'hero',    selector: 'main > section:first-child, [class*="hero"]' },
-  { name: 'footer',  selector: 'footer, [role="contentinfo"]' },
-  { name: 'cta',     selector: 'button[type="submit"], a.cta, .btn-primary' }
-];
-for (const c of components) {
-  // Check element exists first via probe
-  const exists = await browser_evaluate(({sel}) => {
-    const el = document.querySelector(sel);
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
-  }, { sel: c.selector });
-  if (!exists) continue;
-  browser_take_screenshot({
-    path: `{runDir}/screenshots/{cell.id}-vr-{c.name}.png`,
-    selector: c.selector,
-    type: 'png'
-  });
-}
+```
+components = browser_evaluate(probe.findKeyComponents)
+// Returns [{name, selector, rect}] for nav, hero, footer
+
+For each component:
+  compHash = browser_evaluate(probe.computeVisualHash, {
+    gridW: 8,
+    gridH: 8,
+    regionSelector: component.selector
+  })
+  Store as componentHashes[component.name] = compHash
 ```
 
-### Step 3 — Compute pHash via local Node script
+### Step 3 — Load baseline
 
-Run via Bash (the pHash computation is CPU work, not browser work):
+```
+baselineKey = slugify(cell.route) + '-' + cell.viewportClass + '-' + cell.browser
+baselinePath = '{project-root}/.claude/visual-baseline/' + baselineKey + '.json'
 
-```bash
-node {project-root}/scripts/phash.cjs \
-  --input {runDir}/screenshots/{cell.id}-vr-fullpage.png \
-  --output-format json
+Use Bash: node -e "..." to read the file OR use the Read tool
+Try to read baselinePath.
 ```
 
-Returns: `{ pHash: "0x4c81abef2c40df88", width: ..., height: ..., bytesIn: ... }`
+### Step 4 — Compare or create baseline
 
-The `scripts/phash.cjs` helper uses `sharp` + perceptual-hash algorithm. (See "Helper script" below.)
-
-### Step 4 — Compare to baseline
-
-```js
-const baselineKey = `{routeSlug}-{cell.viewportClass}-{cell.browser}`;
-const baselinePath = `.claude/visual-baseline/${baselineKey}.json`;
-
-if (!fs.existsSync(baselinePath)) {
-  // First audit — establish baseline
-  fs.writeFileSync(baselinePath, JSON.stringify({
-    pHash: currentHash, capturedAt: new Date().toISOString(),
-    route: cell.route, viewport: cell.viewportClass, browser: cell.browser
-  }));
-  // Copy the screenshot as the visual baseline reference image
-  fs.copyFileSync(currentPng, `.claude/visual-baseline/${baselineKey}.png`);
-  emit({ issueType: 'visualBaselineCreated', severity: 'info', selector: null,
-    description: `Visual baseline created for ${cell.route} at ${cell.viewportClass}/${cell.browser}` });
-  continue;
+**If baseline does NOT exist:**
+```
+Write baseline:
+{
+  "fullHash": fullHash.hash,
+  "componentHashes": componentHashes,
+  "capturedAt": "<current ISO date>",
+  "route": cell.route,
+  "viewportClass": cell.viewportClass,
+  "browser": cell.browser,
+  "avgBrightness": fullHash.avgBrightness
 }
 
-const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-const hammingDistance = computeHammingDistance(baseline.pHash, currentHash);
+→ emit visualBaselineCreated (info)
+  description: "Visual baseline created for {cell.route} at {cell.viewportClass}/{cell.browser}"
+  (This is an info finding, NOT filed as an ADO bug)
+```
 
-if (hammingDistance > 8) {  // threshold; configurable
-  emit({
-    issueType: 'visualRegression',
-    severity: 'medium',
-    selector: null,
-    description: `Full-page visual differs from baseline by ${hammingDistance} bits (threshold: 8). Baseline captured ${baseline.capturedAt}.`,
-    bbox: null,
-    extra: {
-      hammingDistance,
-      currentScreenshot: currentPng,
-      baselineScreenshot: `.claude/visual-baseline/${baselineKey}.png`
+**If baseline EXISTS:**
+```
+Parse baseline JSON.
+fullDistance = hammingDistance(baseline.fullHash, fullHash.hash)
+
+If fullDistance > 8:
+  → emit visualRegression (medium)
+    evidence: {
+      hammingDistance: fullDistance,
+      threshold: 8,
+      baselineCapturedAt: baseline.capturedAt,
+      route: cell.route
     }
-  });
-}
+
+For each component in componentHashes:
+  If baseline.componentHashes[component.name] exists:
+    compDistance = hammingDistance(baseline.componentHashes[component.name], componentHashes[component.name])
+    threshold = component.name === 'cta' ? 3 : component.name === 'nav' ? 4 : 6
+    If compDistance > threshold:
+      → emit componentRegression (medium)
+        evidence: {
+          component: component.name,
+          hammingDistance: compDistance,
+          threshold
+        }
 ```
 
-Hamming distance > 4 = subtle change (warning). > 8 = visible change (emit). > 16 = major redesign.
+### Step 5 — Take screenshot for evidence
 
-### Step 5 — Component diffs
+```
+browser_take_screenshot()
+```
 
-Repeat Step 4 for each component screenshot. Component thresholds are tighter (> 4 bits flags a regression — components are smaller so less noise tolerance).
-
-| Component | Threshold | Issue type |
-|---|---|---|
-| Full page | > 8 | `visualRegression` |
-| nav | > 4 | `componentRegression` (with `component: "nav"`) |
-| hero | > 6 | `componentRegression` |
-| footer | > 4 | `componentRegression` |
-| cta | > 3 | `componentRegression` |
-
-## Helper script — `scripts/phash.cjs`
-
-Required dependency: `sharp` (npm install sharp). pHash algorithm: standard DCT-based 64-bit.
+## Probes (browser_evaluate)
 
 ```js
-// scripts/phash.cjs
-const sharp = require('sharp');
-const fs = require('fs');
+// probe.computeVisualHash — args: { gridW, gridH, regionSelector }
+// Samples DOM element colors at a grid of points using elementFromPoint + getComputedStyle.
+// Computes a perceptual brightness-based hash. No external packages, no Canvas drawImage limitations.
+({gridW, gridH, regionSelector}) => {
+  let region = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
 
-const args = require('minimist')(process.argv.slice(2));
-const input = args.input;
-
-async function pHash(file) {
-  // Resize to 32×32 grayscale, compute DCT, average top 8x8 block, threshold to 64 bits
-  const { data } = await sharp(file).greyscale().resize(32, 32, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
-  // ... DCT computation (using standard algorithm)
-  // Returns 64-bit hex string
-  return computePHash(data);
-}
-
-function computePHash(buf) {
-  // Simplified — production uses block-DCT
-  let avg = 0;
-  for (let i = 0; i < buf.length; i++) avg += buf[i];
-  avg /= buf.length;
-  let hash = 0n;
-  for (let i = 0; i < 64; i++) {
-    const blockStart = (Math.floor(i / 8) * 32 * 4) + (i % 8) * 4;
-    const blockAvg = (buf[blockStart] + buf[blockStart + 1] + buf[blockStart + 2] + buf[blockStart + 3]) / 4;
-    if (blockAvg > avg) hash |= (1n << BigInt(i));
+  if (regionSelector) {
+    const el = document.querySelector(regionSelector);
+    if (!el) return { hash: null, sampleCount: 0, reason: 'region element not found' };
+    const r = el.getBoundingClientRect();
+    region = { left: r.left, top: r.top, width: r.width, height: r.height };
+    if (region.width < 10 || region.height < 10) return { hash: null, sampleCount: 0, reason: 'region too small' };
   }
-  return '0x' + hash.toString(16).padStart(16, '0');
-}
 
-(async () => {
-  const hash = await pHash(input);
-  console.log(JSON.stringify({ pHash: hash, file: input, bytesIn: fs.statSync(input).size }));
-})();
+  const W = gridW || 16;
+  const H = gridH || 16;
+  const samples = [];
+
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) {
+      const x = region.left + (col / W) * region.width + region.width / (W * 2);
+      const y = region.top + (row / H) * region.height + region.height / (H * 2);
+
+      const el = document.elementFromPoint(x, y);
+      let brightness = 255; // default white
+
+      if (el) {
+        // Walk up to find a meaningful background color
+        let cur = el;
+        while (cur && cur !== document.documentElement) {
+          const style = getComputedStyle(cur);
+          const bg = style.backgroundColor;
+          if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+            const m = bg.match(/[\d.]+/g);
+            if (m && m.length >= 3) {
+              // Weighted luminance (ITU-R BT.601)
+              brightness = (parseFloat(m[0]) * 0.299 + parseFloat(m[1]) * 0.587 + parseFloat(m[2]) * 0.114);
+              break;
+            }
+          }
+          // Also consider text color if no background
+          const color = style.color;
+          if (color && cur === el) {
+            const cm = color.match(/[\d.]+/g);
+            if (cm && cm.length >= 3) {
+              brightness = (parseFloat(cm[0]) * 0.299 + parseFloat(cm[1]) * 0.587 + parseFloat(cm[2]) * 0.114);
+            }
+          }
+          cur = cur.parentElement;
+        }
+      }
+
+      samples.push(brightness);
+    }
+  }
+
+  // Compute average brightness
+  const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+
+  // Build 64-bit hash: bit = 1 if sample >= avg, 0 otherwise (first 64 samples)
+  const hashSamples = samples.slice(0, 64);
+  let hexHash = '0x';
+  for (let i = 0; i < 64; i += 4) {
+    const nibble = hashSamples.slice(i, i + 4).reduce((acc, val, j) => {
+      return acc | ((val >= avg ? 1 : 0) << (3 - j));
+    }, 0);
+    hexHash += nibble.toString(16);
+  }
+
+  return {
+    hash: hexHash,
+    sampleCount: samples.length,
+    avgBrightness: Math.round(avg)
+  };
+}
 ```
 
 ```js
-// Hamming distance: XOR + popcount
-function computeHammingDistance(hexA, hexB) {
+// probe.findKeyComponents
+() => {
+  const componentDefs = [
+    { name: 'nav',    selector: 'nav, header[role="banner"], mat-toolbar' },
+    { name: 'hero',   selector: 'main > section:first-child, [class*="hero"], mat-card:first-of-type' },
+    { name: 'footer', selector: 'footer, [role="contentinfo"]' },
+    { name: 'cta',    selector: 'button[type="submit"], button[mat-raised-button], .btn-primary' }
+  ];
+  const result = [];
+  for (const def of componentDefs) {
+    const el = document.querySelector(def.selector);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) continue;
+    result.push({
+      name: def.name,
+      selector: def.selector,
+      rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    });
+  }
+  return result;
+}
+```
+
+## Hamming distance (computed by orchestrator in JS, not a probe)
+
+```js
+// Inline in orchestrator — no Bash needed
+function hammingDistance(hexA, hexB) {
+  if (!hexA || !hexB) return 999; // treat missing hash as max distance
   const a = BigInt(hexA);
   const b = BigInt(hexB);
   let xor = a ^ b;
@@ -201,47 +253,60 @@ function computeHammingDistance(hexA, hexB) {
 }
 ```
 
+## Baseline file I/O
+
+The orchestrator uses the **Read tool** to read existing baselines and the **Write tool** to create new ones — no Bash, no Node script required.
+
+Baseline file format:
+```json
+{
+  "fullHash": "0x4c81abef2c40df88",
+  "componentHashes": {
+    "nav": "0xabcdef1234567890",
+    "hero": "0x1234567890abcdef",
+    "footer": "0x9876543210fedcba"
+  },
+  "capturedAt": "2026-06-08T10:00:00.000Z",
+  "route": "/dashboard",
+  "viewportClass": "desktop",
+  "browser": "chromium",
+  "avgBrightness": 142
+}
+```
+
 ## Configuration (customize.toml)
 
 ```toml
 [visual_regression]
 enabled                  = true
 full_page_threshold      = 8     # hamming distance > this triggers finding
-component_threshold      = 4     # tighter for components
-auto_update_baseline     = false # set true to update baseline on every run (defeats regression detection)
-critical_routes          = []    # if non-empty, only run visual regression on these routes
-attach_diff_to_ado       = true  # attach baseline + current + visual diff overlay to ADO ticket
+component_threshold      = 4     # tighter for components (override per-component below)
+nav_threshold            = 4
+hero_threshold           = 6
+footer_threshold         = 4
+cta_threshold            = 3
+auto_update_baseline     = false
+critical_routes          = []    # if non-empty, only run on these routes
 ```
 
 ## Hard rules
 
-1. **`.claude/visual-baseline/` MUST be gitignored** — baselines are local. Add to .gitignore on first run.
-2. **First audit always creates baseline, never flags regression** — `visualBaselineCreated` is info, not bug.
-3. **Threshold MUST be configurable** — different apps have different visual stability.
-4. **fullPage screenshot is REQUIRED** — viewport-only misses below-fold regressions.
-5. **NEVER overwrite baseline without explicit user opt-in** (`auto_update_baseline = true`).
-6. **Component screenshots only on elements that exist** — silently skip missing components.
+1. **NO `scripts/phash.cjs`** — hash computed entirely via `browser_evaluate` + `probe.computeVisualHash`. No `sharp`, no npm packages.
+2. **NO Bash for image processing** — use the Read/Write tools for baseline I/O.
+3. **`.claude/visual-baseline/` MUST be gitignored** — baselines are local.
+4. **First audit always creates baseline, never emits regression** — `visualBaselineCreated` is info, not a bug.
+5. **Threshold MUST be configurable** — different apps have different visual stability.
+6. **NEVER overwrite baseline without `auto_update_baseline = true`**.
 
-## Cost analysis
+## Why this approach works without sharp
 
-| Phase | Cost |
-|---|---|
-| Take fullPage screenshot | $0 (MCP call, no LLM tokens) |
-| Take component screenshots | $0 |
-| pHash computation (local Node) | $0 |
-| Hamming distance compare | $0 |
-| **Per-cell LLM cost** | **~$0.0005** (just reporting findings) |
+Instead of decoding a PNG image and computing DCT-based pHash (which requires `sharp`), this skill:
+1. Samples the **rendered DOM color** at a 16×16 grid of viewport points using `elementFromPoint` + `getComputedStyle`
+2. This captures the ACTUAL rendered pixel colors (including CSS, shadows, gradients, web fonts)
+3. Computes brightness-based hash — same structure as standard dHash/pHash
+4. The hash captures: background color changes, text color shifts, missing elements (point returns white), layout shifts (element at point changes type)
 
-Visual regression is essentially **free in tokens**. Cost is disk space: ~200 KB per baseline image × N routes × N viewports.
-
-## Bootstrapping
-
-On first audit, every cell creates a baseline → emits N `visualBaselineCreated` info findings. These are NOT filed as ADO bugs. Coverage report should show `baselinesCreated: N` instead.
-
-After first audit, subsequent audits only emit findings when visual drift exceeds threshold.
-
-## Notes
-
-- This skill is the ONLY way to catch web-font load failures (text renders in fallback font → pixels change → pHash changes).
-- For brand-controlled apps with frequent intentional design changes, set `auto_update_baseline = true` per route. Defeats regression detection on that route but reduces noise.
-- The `--rebuild-baseline` CLI flag forces baseline regeneration on the next audit.
+**Limitations vs sharp-based pHash:**
+- Does not capture image content inside `<img>` tags or `<canvas>`
+- Does not capture CSS `background-image` content
+- These are acceptable trade-offs for a zero-dependency approach

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-theme-consistency
+section: visual
 description: "Detects color/theme mismatches: focus ring color doesn't match site primary, link color drifts from theme, accent/hover colors break visual identity, mix of blue/purple/teal across same UI surface. Catches the 'why does this part look like a different website' bug class."
 model: haiku
 applyOn: all

@@ -1,5 +1,6 @@
 ---
 name: qa-cell-worker
+section: pipeline
 description: "Parallel cell-execution subagent. Receives a chunk of audit cells, opens its own browser tab, runs them sequentially within the tab, writes findings to JSONL, returns. Spawned in parallel by qa-argus Step 5.1 when resolvedConfig.workers > 1. Honors the workers setting dynamically: workers=4 spawns 4 of these in parallel, workers=8 spawns 8."
 model: sonnet
 applyOn: all
@@ -59,16 +60,40 @@ allSkills   = probeBundle.skills
 **Phase ordering is MANDATORY — process cells in this exact order:**
 
 ```
-phase1Cells = cells.filter(c => c.phase === 1)  // public/unauthenticated pages — NO login
-phase2Cells = cells.filter(c => c.phase === 2)  // login flow
-phase3Cells = cells.filter(c => c.phase === 3)  // auth-gated pages
+// Step A — build the pre-login and post-login batches
+// Works for BOTH phased audit plans (c.phase set) AND flat/legacy plans (c.phase absent).
+const loginRoute = resolvedConfig.loginPath   // e.g. "/authentication/signin"
+
+// A cell runs BEFORE login if:
+//   (a) it was explicitly tagged phase 1 by qa-phase-strategy, OR
+//   (b) its route IS the login page itself (catches flat plans where phase is unset)
+preLoginCells = cells.filter(c =>
+  c.phase === 1 ||
+  c.route === loginRoute
+)
+
+phase2Cells = cells.filter(c => c.phase === 2)
+
+// Everything else (phase 3 or unphased non-login routes) runs AFTER login
+postLoginCells = cells.filter(c =>
+  !preLoginCells.includes(c) && c.phase !== 2
+)
 ```
 
-**Process phase1Cells FIRST (no session):** navigate each public page, run probes, write JSONL.
-This captures the real unauthenticated state (signin form, forgot-password, 404/500 pages).
+🚨 **SIGN-IN PAGE RULE (no exceptions):**
+The login/sign-in route (`resolvedConfig.loginPath`) MUST always be in `preLoginCells`.
+If audited after login, Angular/React SPAs silently redirect to dashboard — all probes run
+on the wrong page and tag dashboard bugs as sign-in bugs. This is the single most common
+source of wrong-route findings.
+If `preLoginCells` is empty after the filter above (i.e. the audit plan has no phase-tagged
+cells AND the login route doesn't appear in `cells`), skip the pre-login batch silently.
+
+**Process preLoginCells FIRST (no session):** navigate each public/login page, run probes, write JSONL.
+This captures the real unauthenticated state: the actual sign-in form, field labels, validation
+UI, placeholder text, and layout — exactly what a real user sees before they log in.
 The browser has no cookies at this point — public pages render correctly.
 
-**Then log in (between Phase 1 and Phase 2):**
+**Then log in (between pre-login and post-login):**
 ```
 mcp__{serverName}__browser_navigate({ url: baseUrl + loginPath, waitUntil: "domcontentloaded" })
 mcp__{serverName}__browser_type(email into the email/username field)
@@ -80,7 +105,7 @@ LOG: "[worker {chunkIndex}] logged in"
 ```
 If login fails: return early with `{ loginFailed: true }`.
 
-**Then process phase2Cells and phase3Cells** with the active session.
+**Then process phase2Cells and postLoginCells** with the active session.
 
 ### URL VERIFICATION — MANDATORY after every browser_navigate
 
@@ -134,6 +159,11 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
    - `actualPath = mcp__{serverName}__browser_evaluate("return location.pathname")`
    - **If `actualPath !== cell.route`: write `cellRedirected` info finding, SKIP all probes, continue to next cell.**
      This prevents findings from being tagged to the wrong route when an SPA redirects (e.g. authenticated session redirects `/authentication/signin` → `/admin/dashboard/main`).
+
+   🚨 **SCROLL TO TOP before probes (MANDATORY):**
+   - `mcp__{serverName}__browser_evaluate("window.scrollTo(0,0)")`
+
+   `getBoundingClientRect()` is viewport-relative. If the app auto-scrolled during load (Angular scroll restoration, auto-focus, lazy-load layout shift), every bbox.y would be offset by scrollY — placing every annotation box at the wrong element in the fullPage screenshot (which always captures from document y=0). Forcing scroll=0 here makes viewport-relative coordinates equal to document-absolute coordinates, so annotations are drawn on the correct element.
 
 3. **Run ALL passive probes in ONE batched browser_evaluate** — every skill in `passiveSkills`, no skipping:
    ```js

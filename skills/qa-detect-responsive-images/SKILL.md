@@ -1,5 +1,6 @@
 ---
 name: qa-detect-responsive-images
+section: responsiveness
 description: "Detects images served without srcset, missing max-width:100%, missing loading='lazy' below the fold, and oversized natural dimensions for the viewport"
 model: haiku
 applyOn: all

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-feedback
+section: visual
 description: "Detects UX feedback gaps: empty states without illustration/CTA, tables with no rows + no empty message, modals without visible close button, modals not dismissible via ESC/backdrop, search bars without clear button. Goes beyond a11y — catches missing user-feedback patterns."
 model: haiku
 applyOn: all
@@ -7,7 +8,7 @@ needsSetup: false
 viewportSensitive: false
 ---
 
-## What it catches — 7 issue types
+## What it catches — 8 issue types
 
 | issueType | severity | What |
 |---|---|---|
@@ -17,6 +18,7 @@ viewportSensitive: false
 | `modalNoEscDismiss` | medium | Open modal has no `data-dismiss`, no `aria-modal`, and no detected ESC key handler — keyboard users can't close it. |
 | `modalNoBackdropDismiss` | low | Open modal has backdrop element but no detected click handler to dismiss on backdrop click. |
 | `searchNoClearButton` | low | Visible search input (>20 chars typed OR placeholder mentions "search") has no visible clear (X) button. |
+| `searchPlaceholderTooGeneric` | low | Search input placeholder is a generic 1-3 word phrase ("Search budgets...") while the adjacent table has 3+ searchable text columns — users don't know which fields will be searched |
 | `loadingNoIndicator` | medium | Element matched `aria-busy="true"` or `[class*="loading"]` is present but has no visible spinner/progress text inside. |
 
 ## Probe (browser_evaluate)
@@ -132,30 +134,7 @@ viewportSensitive: false
     }
   }
 
-  // ── 6. Search input without clear button ──────────────────────────────
-  let searchFlagged = 0;
-  const searchInputs = document.querySelectorAll('input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i]');
-  for (const inp of searchInputs) {
-    if (searchFlagged >= 2) break;
-    if (!visible(inp)) continue;
-    const value = (inp.value || '').trim();
-    const placeholder = (inp.getAttribute('placeholder') || '').toLowerCase();
-    if (value.length < 1 && !placeholder.includes('search')) continue;
-    // Look for a clear button nearby (input wrapper)
-    const wrap = inp.closest('.search, .input-group, .search-wrapper, .input-container, .search-box') || inp.parentElement;
-    if (!wrap) continue;
-    const clearBtn = wrap.querySelector('button[aria-label*="clear" i], .clear-button, .search-clear, [class*="clear"]');
-    if (!clearBtn || !visible(clearBtn)) {
-      searchFlagged++;
-      out.push({
-        issueType: 'searchNoClearButton', severity: 'low',
-        selector: sel(inp), bbox: bb(inp),
-        description: 'Search input has no visible clear (X) button. Users have to backspace through to reset.'
-      });
-    }
-  }
-
-  // ── 7. Loading element with no indicator inside ───────────────────────
+  // ── Loading element with no indicator inside (REAL: blank, no feedback) ─
   let loadingFlagged = 0;
   const loadingEls = document.querySelectorAll('[aria-busy="true"], .loading, .is-loading, [class*="spinner"], [class*="skeleton"]');
   for (const el of loadingEls) {

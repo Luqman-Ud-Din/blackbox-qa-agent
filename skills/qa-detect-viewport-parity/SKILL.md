@@ -1,5 +1,6 @@
 ---
 name: qa-detect-viewport-parity
+section: responsiveness
 description: "Detects features/columns/actions present on desktop but silently dropped on mobile/tablet (lost functionality, not just relocated into a drawer)"
 model: haiku
 applyOn: [mobile, tablet]

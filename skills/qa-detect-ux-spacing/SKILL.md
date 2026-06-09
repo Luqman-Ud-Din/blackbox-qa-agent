@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-spacing
+section: visual
 description: "Catches inconsistent vertical/horizontal spacing — adjacent form fields with different gaps, card groups with mismatched padding, button rows with uneven spacing, headings inconsistently spaced from following content. Detects design-system breakage at the pixel level."
 model: haiku
 applyOn: all

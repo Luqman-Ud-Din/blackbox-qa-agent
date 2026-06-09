@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-hover
+section: visual
 description: "Detects hover-state quality issues: buttons/links with no :hover style at all, hover state identical to default state (no visual change), hover color off the site theme, hover transitions missing (abrupt change), icon-only buttons with no hover feedback. Catches the 'button doesn't have good hover' bug class."
 model: haiku
 applyOn: all

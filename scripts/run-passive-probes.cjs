@@ -51,6 +51,7 @@ const RUN_ID = process.argv[2];
 if (!RUN_ID || RUN_ID.startsWith('--')) { console.error('Usage: node scripts/run-passive-probes.cjs <run-id> [--browsers=...] [--headed]'); process.exit(1); }
 const ARGV = process.argv.slice(3);
 const HEADED = ARGV.includes('--headed');
+const RESUME = ARGV.includes('--resume');   // skip cells whose receipt already exists (crash/compaction recovery)
 const browsersArg = (ARGV.find(a => a.startsWith('--browsers=')) || '').split('=')[1];
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -72,7 +73,12 @@ const SECRETS = (() => { try { return readJson(path.join(PROJECT_ROOT, '.claude/
 const plan    = readJson(path.join(RUN_DIR, 'audit-plan.json'));
 const bundle  = readJson(path.join(RUN_DIR, 'skill-probes.json'));
 
-const cells   = plan.cells || [];
+// audit-plan.json may be flat (plan.cells[]) or phases-based (plan.phases[].cells[]).
+// qa-phase-strategy writes phases-based; qa-argus Step 5.0.A may flatten it in memory only.
+// Handle both so the runner never silently processes 0 cells.
+const cells   = plan.cells
+  || (plan.phases && plan.phases.flatMap(p => p.cells || []))
+  || [];
 const passive = (bundle.skills || []).filter(s => s.probe && !s.interactive);
 if (passive.length === 0) { console.error('No passive probes in skill-probes.json — run bundle-probes.cjs first.'); process.exit(1); }
 
@@ -143,6 +149,18 @@ function runAllProbes(skills) {
   return out;
 }
 
+// ── Viewport scoping: honor each skill's `applyOn` frontmatter ───────────────
+// A skill with applyOn:["mobile","tablet"] must NOT run on a laptop/desktop cell
+// (e.g. touch-target, safe-area, hover-stuck-on-touch are meaningless with a mouse).
+// Without this, every mobile-only probe fired on desktop and produced context-noise.
+function appliesTo(skill, vpClass) {
+  const a = skill.applyOn;
+  if (a == null || a === 'all') return true;
+  if (Array.isArray(a)) return a.length === 0 || a.includes(vpClass);
+  if (typeof a === 'string') return a === 'all' || a.split(/[,\s]+/).filter(Boolean).includes(vpClass);
+  return true;
+}
+
 // ── Turn a probe result object into verbatim findings ───────────────────────
 function toFindings(resultObj, cell, engine) {
   const findings = [];
@@ -150,6 +168,7 @@ function toFindings(resultObj, cell, engine) {
     runId: RUN_ID, cellId: cell.id, route: cell.route,
     viewport: cell.viewport, viewportClass: cell.viewportClass, browser: engine,
     screenshotPath: `.tmp/${RUN_ID}/screenshots/${cell.id}-base.png`,
+    producedBy: 'runner',   // deterministic + receipt-proven → trusted by the file-bugs evidence gate
   };
   for (const skill of passive) {
     const r = resultObj[skill.name];
@@ -202,12 +221,29 @@ async function attemptLogin(page) {
 
 async function runCell(page, cell, engine) {
   const t0 = Date.now();
+  // RESUME: if this cell already has a probe receipt, it completed on a prior run — skip it.
+  // Lets a crash / context-compaction recover without re-running (or clobbering) finished cells.
+  if (RESUME && fs.existsSync(path.join(ISSUES, `${cell.id}-probes.json`))) {
+    console.log(`  ⤼ ${cell.id} ${cell.route} @ ${cell.viewportClass}/${engine} — skipped (resume)`);
+    return { cell: cell.id, resumed: true, findings: 0 };
+  }
   try {
     await page.setViewportSize({ width: cell.width || 1440, height: cell.height || 900 });
     capture = { console: [], network: [] };   // reset live capture for THIS cell's navigation
     await page.goto(BASE_URL + cell.route, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForTimeout(1500);
-    const actual = await page.evaluate(() => location.pathname);
+    let actual = await page.evaluate(() => location.pathname);
+    // AUTH RESILIENCE: a short-TTL token or a 401-destroys-session app bounces us to login
+    // mid-run. Re-login and retry the navigation ONCE before giving up — this is what stops
+    // the silent truncation where every later cell only audited the login page.
+    if (actual !== cell.route && /signin|login|auth/i.test(actual)) {
+      const back = await attemptLogin(page);
+      if (back) {
+        await page.goto(BASE_URL + cell.route, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        actual = await page.evaluate(() => location.pathname);
+      }
+    }
     if (actual !== cell.route) {
       // Redirect guard — record it, do NOT run probes on the wrong page.
       const rec = { runId: RUN_ID, cellId: cell.id, skill: 'qa-cell-worker', issueType: 'cellRedirected',
@@ -221,12 +257,22 @@ async function runCell(page, cell, engine) {
       fs.writeFileSync(path.join(ISSUES, `${cell.id}-probes.json`), JSON.stringify(skipReceipt));
       return { cell: cell.id, redirected: actual, findings: 0 };
     }
-    // Run ALL passive probes in ONE evaluate — code-driven, cannot be subset.
-    const result = await page.evaluate(runAllProbes, passive.map(s => ({ name: s.name, probe: s.probe })));
+    // Scroll to page top before measuring. getBoundingClientRect() is viewport-relative:
+    // if the app auto-scrolled (Angular scroll restoration, auto-focus, lazy-load shift),
+    // every bbox would be offset by scrollY, placing annotations at the wrong element
+    // in the fullPage screenshot (which always captures from document y=0).
+    await page.evaluate(() => window.scrollTo(0, 0));
+    // Run every passive probe whose applyOn matches THIS cell's viewport — code-driven,
+    // cannot be subset by a model. Mobile-only skills are skipped on laptop/desktop cells.
+    const applicable = passive.filter(s => appliesTo(s, cell.viewportClass));
+    const result = await page.evaluate(runAllProbes, applicable.map(s => ({ name: s.name, probe: s.probe })));
     // Base screenshot (real path the annotator/file-bugs expect).
     await page.screenshot({ path: path.join(SHOTS, `${cell.id}-base.png`), fullPage: true });
-    // Receipt = proof every passive skill executed.
-    fs.writeFileSync(path.join(ISSUES, `${cell.id}-probes.json`), JSON.stringify(result));
+    // Receipt = proof every passive skill was accounted for: applicable ones ran,
+    // out-of-scope ones are marked skipped (so coverage-gate counts them, no silent gap).
+    const receipt = { ...result };
+    for (const s of passive) if (!(s.name in receipt)) receipt[s.name] = { skipped: 'notApplicableToViewport:' + cell.viewportClass };
+    fs.writeFileSync(path.join(ISSUES, `${cell.id}-probes.json`), JSON.stringify(receipt));
     // Findings, verbatim.
     const findings = toFindings(result, cell, engine);
 
@@ -234,7 +280,8 @@ async function runCell(page, cell, engine) {
     // For these, the "annotated" screenshot is a real DevTools-style panel rendered
     // INTO the page and screenshotted — legible, not the plain page shot.
     const env2 = { runId: RUN_ID, cellId: cell.id, route: cell.route, viewport: cell.viewport,
-      viewportClass: cell.viewportClass, browser: engine, screenshotPath: `.tmp/${RUN_ID}/screenshots/${cell.id}-base.png` };
+      viewportClass: cell.viewportClass, browser: engine, producedBy: 'runner',
+      screenshotPath: `.tmp/${RUN_ID}/screenshots/${cell.id}-base.png` };
     if (capture.console.length) {
       const evi = await captureEvidencePanel(page, cell.id, 'console', capture.console.slice(0, 12)).catch(() => null);
       findings.push({ ...env2, skill: 'qa-detect-console-errors', issueType: 'consoleError', severity: 'high',

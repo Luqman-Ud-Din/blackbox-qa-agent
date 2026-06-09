@@ -1,5 +1,6 @@
 ---
 name: qa-detect-a11y
+section: accessibility
 description: "Detects missing H1, unnamed buttons, missing lang attribute, absent skip-to-content link, and missing/disabled viewport meta."
 model: haiku
 applyOn: all

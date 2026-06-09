@@ -1,5 +1,6 @@
 ---
 name: qa-detect-loading-states
+section: performance
 description: "Tests loading-state behavior under simulated slow network. Detects stuck skeletons, loading spinners overlapping content, lazy-load that fails on slow connections, and below-fold content that never loads. Uses fetch interceptor for network throttling (works without CDP)."
 model: haiku
 applyOn: [mobile]
@@ -164,9 +165,17 @@ Each state captures: { skeletonCount, spinnerCount, criticalContentPresent, lazy
     return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
   });
 
-  // Critical content presence (above-fold heuristics)
-  const heroPresent = !!document.querySelector('main h1, [class*="hero"] h1, main > section:first-child h1');
-  const ctaPresent = !!document.querySelector('button[type="submit"], a.cta, .btn-primary');
+  // Critical content presence (above-fold heuristics — includes Angular Material selectors)
+  const heroPresent = !!document.querySelector(
+    'main h1, [class*="hero"] h1, main > section:first-child h1, ' +
+    'mat-card-title, mat-toolbar-row h1, mat-toolbar h1, ' +
+    '[class*="page-title"], [class*="page-header"] h1, [class*="mat-h1"], ' +
+    '.mat-headline, mat-sidenav-content h1, mat-sidenav-content h2'
+  );
+  const ctaPresent = !!document.querySelector(
+    'button[type="submit"], a.cta, .btn-primary, ' +
+    'button[mat-raised-button], button[mat-flat-button], [class*="mat-primary"]'
+  );
   const mainContentLength = (document.querySelector('main') || document.body).innerText.length;
 
   // Lazy image counts

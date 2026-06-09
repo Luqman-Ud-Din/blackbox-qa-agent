@@ -1,5 +1,6 @@
 ---
 name: qa-detect-css-compat
+section: visual
 description: "Scans CSS stylesheets for properties with known cross-browser compatibility gaps: missing vendor prefixes, Safari-specific traps, Firefox layout quirks, and properties without fallbacks"
 model: haiku
 applyOn: all

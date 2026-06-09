@@ -1,8 +1,9 @@
 ---
 name: qa-test-i18n
+section: interactive
 description: "Tests language switcher effect and checks for untranslated key strings"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true
@@ -15,7 +16,7 @@ Skip if no visible: `[aria-label*="language" i], [data-testid*="lang"], select[n
 
 **Language switch:**
 - Baseline: `allInnerTexts()` of `h1, h2, nav, main p, button, label`
-- Click switcher. Wait 300ms. Click first non-selected option: `option:not([selected]), .language-option:not(.active), [role="option"]:not([aria-selected="true"])` (first). Wait networkidle (8s).
+- Click switcher. Wait 300ms. Click first non-selected option: `option:not([selected]), .language-option:not(.active), [role="option"]:not([aria-selected="true"])` (first). Wait `domcontentloaded` (8s) then `browser_wait_for(time=800)` to allow Angular change detection to settle.
 - If `baseline.join(' ').slice(0,500) === after.join(' ').slice(0,500) AND baseline.join(' ').length > 20` → languageSwitchNoEffect (medium)
 
 **Untranslated keys (only if language switched):**

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-table-data
+section: visual
 description: "Detects table data-quality UX problems: excessive empty space below a small row count, reverse-ordered Sr#/ID columns (7 at top, 1 at bottom), columns that are empty in every visible row, sort indicators on only some columns. Catches the 'why does this table look broken' bug class."
 model: haiku
 applyOn: all

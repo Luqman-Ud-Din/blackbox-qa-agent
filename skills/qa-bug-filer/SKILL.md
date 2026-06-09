@@ -1,5 +1,6 @@
 ---
 name: qa-bug-filer
+section: pipeline
 description: "Deduplicates issues.jsonl and files Azure DevOps Bug work items with annotated screenshots attached"
 model: sonnet
 notes: "Sonnet only for bug-description prose. Dedup, API calls, and attachment upload run on Haiku-tier mechanical steps."

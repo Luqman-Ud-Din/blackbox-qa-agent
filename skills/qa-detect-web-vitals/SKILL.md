@@ -1,5 +1,6 @@
 ---
 name: qa-detect-web-vitals
+section: performance
 description: "Measures all 6 Core Web Vitals (LCP, CLS, INP, TBT, TTFB, FCP) via PerformanceObserver injected through Playwright MCP. Compares to Google's official thresholds — same metrics Lighthouse measures, same thresholds Chrome ranks pages on for SEO."
 model: haiku
 applyOn: all

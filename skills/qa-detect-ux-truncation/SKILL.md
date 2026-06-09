@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-truncation
+section: visual
 description: "Detects content truncation that hides information from users: table header text cut mid-word ('Reg', 'Nan', 'Clas'), cell content clipped to a single character, button text ellipsised, breadcrumb item truncated. Goes beyond a11y — catches readability failures."
 model: haiku
 applyOn: all

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-modal-form
+section: visual
 description: "Detects modal + form UX issues: modal title singular/plural mismatch ('Update Districts' when editing 1 row), modal not horizontally centered, required-asterisk shown on only some required fields, static info text placed next to inputs looks like another field, action buttons not in standard footer position."
 model: haiku
 applyOn: all

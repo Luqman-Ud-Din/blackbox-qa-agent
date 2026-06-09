@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-selected-color-mix
+section: visual
 description: "Detects multiple different colors used for SELECTED/ACTIVE/HIGHLIGHTED indicators in the same UI region (e.g. calendar with 'today' in light purple, 'month' view in dark purple, '5' date in blue — three different colors all conveying 'selected'). Catches the 'same widget uses 3 shades for the same concept' bug class."
 model: haiku
 applyOn: all

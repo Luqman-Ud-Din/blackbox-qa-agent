@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-icons
+section: visual
 description: "Catches icon UX problems: icon-only buttons without tooltip, icons without accessible labels, ambiguous icon meaning, oversized/undersized icons, icon-text gap inconsistency. Goes beyond qa-detect-a11y (which only checks aria-label presence) — checks discoverability + UX clarity."
 model: haiku
 applyOn: all
@@ -7,13 +8,15 @@ needsSetup: false
 viewportSensitive: false
 ---
 
-## What it catches — 7 issue types
+## What it catches — 9 issue types
 
 | issueType | severity | What |
 |---|---|---|
 | `iconButtonNoTooltip` | high | Icon-only button (no visible text) has no `title` attribute AND no tooltip element nearby — sighted users have no way to know what it does |
 | `iconAmbiguousMeaning` | medium | Icon-only button uses an ambiguous symbol (3 dots, arrows, generic shapes) with no label or tooltip — purpose unclear |
-| `iconUndersized` | low | Icon visible but rendered < 16px square — too small to recognize at a glance |
+| `iconUndersized` | low | Icon visible but rendered < 12px square — too small to recognize at a glance |
+| `iconAspectExtreme` | high | Icon rendered with extreme aspect ratio (>3:1 or <1:3) — looks squashed/sliver-like instead of square. Indicates CSS width/height bug or broken SVG dimensions |
+| `iconClippedInButton` | high | Icon inside a button is < 25% of the button's height (e.g. 8px icon in a 60px button) — visually a tiny dot/sliver above text. Indicates parent overflow:hidden, missing icon font-size, or wrong SVG sizing |
 | `iconOversized` | low | Decorative icon > 64px square — wastes screen real estate especially on mobile |
 | `iconTextGapInconsistent` | low | Icons next to text labels use inconsistent gaps (some 4px, some 12px) across the same view |
 | `iconDuplicatedMeaning` | low | Same icon (same SVG path or class) used for two different actions on the same page |
@@ -94,19 +97,57 @@ viewportSensitive: false
   // 3 + 4. Icon size — find all visible <svg> + <i>+ <img class*="icon">
   const iconEls = document.querySelectorAll('svg, i[class*="icon"], i.fa, i.material-icons, img[class*="icon"], img[alt=""]');
   let sizeFlagged = 0;
+  let aspectFlagged = 0;
+  let clippedFlagged = 0;
   for (const ic of iconEls) {
-    if (sizeFlagged >= 4) break;
+    if (sizeFlagged >= 4 && aspectFlagged >= 4 && clippedFlagged >= 4) break;
     if (!visible(ic)) continue;
     const r = ic.getBoundingClientRect();
     const dim = Math.min(r.width, r.height);
-    if (dim < 12) {
+
+    // 3a. iconUndersized — both dimensions tiny
+    if (dim < 12 && sizeFlagged < 4) {
       sizeFlagged++;
       out.push({
         issueType: 'iconUndersized', severity: 'low',
         selector: sel(ic), bbox: bb(ic),
         description: `Icon rendered at ${r.width.toFixed(0)}×${r.height.toFixed(0)}px — too small to read at a glance. Use ≥16px for UI icons.`
       });
-    } else if (r.width > 64 && r.height > 64 && !ic.closest('button, a, [role="button"]')) {
+      continue;
+    }
+    // 3b. iconAspectExtreme — squashed/stretched (e.g. 16×4 or 4×16) — clearly broken rendering
+    if (r.width > 0 && r.height > 0 && aspectFlagged < 4) {
+      const ratio = r.width / r.height;
+      if (ratio > 3 || ratio < 0.33) {
+        aspectFlagged++;
+        out.push({
+          issueType: 'iconAspectExtreme', severity: 'high',
+          selector: sel(ic), bbox: bb(ic),
+          description: `Icon rendered ${r.width.toFixed(0)}×${r.height.toFixed(0)}px (aspect ${ratio.toFixed(2)}:1) — icons should be roughly square. Likely a CSS height/width bug squashing the icon. Visible icon looks like a sliver instead of a recognizable shape.`
+        });
+        continue;
+      }
+    }
+    // 3c. iconClippedInButton — small icon (< 16px tall) inside a tall button (>= 50px)
+    //     where icon takes < 20% of button height — clear visual mismatch, button looks like
+    //     it has a dot/sliver above the text instead of a real icon.
+    if (clippedFlagged < 4 && r.height < 16 && r.height >= 3) {
+      const btn = ic.closest('button, a[href], [role="button"], .btn, [class*="quick-action"]');
+      if (btn && btn !== ic) {
+        const br = btn.getBoundingClientRect();
+        if (br.height >= 50 && r.height / br.height < 0.20) {
+          clippedFlagged++;
+          out.push({
+            issueType: 'iconClippedInButton', severity: 'high',
+            selector: sel(ic), bbox: bb(ic),
+            description: `Icon is only ${r.height.toFixed(0)}px tall inside a ${br.height.toFixed(0)}px button (${((r.height/br.height)*100).toFixed(0)}% of button height). Icon appears clipped or undersized — looks like a sliver/dot instead of a clear icon. Check for parent overflow:hidden with too-small height, missing icon font-size, or broken SVG dimensions.`
+          });
+          continue;
+        }
+      }
+    }
+    // 4. iconOversized — decorative icon way too big
+    if (r.width > 64 && r.height > 64 && !ic.closest('button, a, [role="button"]') && sizeFlagged < 4) {
       sizeFlagged++;
       out.push({
         issueType: 'iconOversized', severity: 'low',

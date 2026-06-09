@@ -54,7 +54,9 @@ const SECRETS = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, '.claude/secr
 const PAT      = process.env.ADO_PAT || process.env.AZURE_DEVOPS_PAT || SECRETS.AZURE_DEVOPS_PAT || SECRETS.ADO_PAT;
 const ORG_NAME = (CONFIG.ado.org || '').replace('https://dev.azure.com/', '').replace(/\/$/, '');
 const PROJECT  = CONFIG.ado.project;
-const APP      = (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].name) || 'app';
+const _planFile = path.join(RUN_DIR, 'audit-plan.json');
+const _runPlan  = fs.existsSync(_planFile) ? JSON.parse(fs.readFileSync(_planFile, 'utf8')) : {};
+const APP       = _runPlan.app || (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].name) || 'app';
 const AREA     = CONFIG.ado.areaPath || PROJECT;
 // Bug cap. DEFAULT = unlimited — file EVERY detected issue, never skip one.
 // To re-enable a spam guard, set a positive integer via env QA_MAX_BUGS
@@ -109,7 +111,7 @@ function escape(s) {
 
 // ── Build the rich-text body (used for BOTH ReproSteps AND Description) ────
 function buildBody(issue) {
-  const baseUrl = (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].baseUrl) || '';
+  const baseUrl = _runPlan.baseUrl || (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].baseUrl) || '';
   const fullUrl = baseUrl + (issue.route || '');
   const bboxStr = issue.bbox
     ? `x:${issue.bbox.x}, y:${issue.bbox.y}, ${issue.bbox.w}×${issue.bbox.h}`
@@ -348,6 +350,30 @@ async function fileBug(issue) {
       console.log(`  ⚠ Rejected ${fabricated.length} findings with FABRICATED issueTypes (skill cannot emit them):`);
       for (const [k, n] of Object.entries(byType)) console.log(`      ${k}  ×${n}`);
       console.log(`  After issuetype gate: ${afterSkillFilter.length} real findings remain (was ${before})`);
+    }
+  }
+
+  // ── EVIDENCE GATE (no fake tickets without evidence) ─────────────────────
+  // Every filed ticket must be backed by something a developer can verify.
+  //   • producedBy === 'runner'  → deterministic Playwright probe, receipt-proven → trusted.
+  //   • a numeric bbox           → annotated box pinpoints the element.
+  //   • evidenceType             → a console / network DevTools-panel screenshot.
+  //   • a concrete CSS selector  → the dev can locate the element.
+  // A finding with NONE of these is an unanchored, model-authored claim — the exact
+  // "fake ticket with no evidence" class. Drop it rather than file it.
+  {
+    const hasBbox     = i => i.bbox && typeof i.bbox.x === 'number';
+    const realSel     = i => typeof i.selector === 'string' && i.selector.trim().length > 1 && i.selector !== 'null';
+    const isEvidenced = i => i.producedBy === 'runner' || hasBbox(i) || i.evidenceType || i.interacted === true || realSel(i);
+    const before = afterSkillFilter.length;
+    const unverified = afterSkillFilter.filter(i => !isEvidenced(i));
+    afterSkillFilter = afterSkillFilter.filter(isEvidenced);
+    if (unverified.length > 0) {
+      const byType = {};
+      for (const u of unverified) byType[`${u.skill}:${u.issueType}`] = (byType[`${u.skill}:${u.issueType}`] || 0) + 1;
+      console.log(`  ⚠ Rejected ${unverified.length} UNVERIFIED findings (no bbox, no evidence panel, no selector — not from the deterministic runner):`);
+      for (const [k, n] of Object.entries(byType)) console.log(`      ${k}  ×${n}`);
+      console.log(`  After evidence gate: ${afterSkillFilter.length} evidenced findings remain (was ${before})`);
     }
   }
 

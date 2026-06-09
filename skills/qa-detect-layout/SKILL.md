@@ -1,5 +1,6 @@
 ---
 name: qa-detect-layout
+section: responsiveness
 description: "Detects fixed/sticky overflow, narrow content, CTA below fold, dropdown cutoff, content bleed-through, critical-element-hidden, excessive whitespace, sticky-covers-action, table overflow, fixed header obstructing content, element overlap, grid/flex collapse failures, sticky header too tall on mobile"
 model: haiku
 applyOn: all

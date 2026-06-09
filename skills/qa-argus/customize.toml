@@ -27,7 +27,7 @@ escalation_model       = "sonnet"
 qa-detect-overflow              = true
 qa-detect-typography            = true
 qa-detect-typography-advanced   = true
-qa-detect-typography-responsive = true   # responsive/legibility gaps: fluid type, justified-hyphens, text-over-image, px sizing, tabular figures
+qa-detect-typography-responsive = false   # responsive/legibility gaps: fluid type, justified-hyphens, text-over-image, px sizing, tabular figures   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-touch                 = true
 qa-detect-images                = true
 qa-detect-layout                = true
@@ -69,6 +69,7 @@ qa-test-dragdrop                = true
 qa-test-i18n                    = true
 qa-test-theme                   = true
 qa-test-cases                   = true
+qa-test-crud                    = true   # full create→edit→delete cycle with cleanup (needs allow_form_submit=true)
 
 # --- Content review skills ---
 qa-review-content               = true
@@ -107,37 +108,42 @@ qa-detect-web-vitals            = true   # 6 vitals + long-tasks + DOM-size + ma
 # These cover what the a11y/overflow/touch skills don't: visual symmetry,
 # icon UX, action button quality, feedback gaps, spacing consistency, affordance.
 # Each is a deterministic browser probe — runs in the batched Haiku call.
-qa-detect-ux-symmetry           = true   # left/right padding, card edge mismatch, viewport centering
-qa-detect-ux-icons              = true   # icon-only buttons w/o tooltip, ambiguous icons, size/duplicates/color-only
-qa-detect-ux-actions            = true   # destructive without confirm, multiple primary CTAs, disabled without explanation
+qa-detect-ux-symmetry           = false   # left/right padding, card edge mismatch, viewport centering   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-icons              = false   # icon-only buttons w/o tooltip, ambiguous icons, size/duplicates/color-only   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-actions            = false   # destructive without confirm, multiple primary CTAs, disabled without explanation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-feedback           = true   # empty states, modal close/ESC, search clear, loading indicators
-qa-detect-ux-spacing            = true   # form field gaps, button group gaps, card padding, heading breathing room
-qa-detect-ux-affordance         = true   # cursor:pointer, link styling, input borders, focus visible, hover-only controls
-qa-detect-ux-table-layout       = true   # header width mismatch (dead space), phantom columns, missing sticky/zebra, empty Actions column
-qa-detect-ux-nav-icons          = true   # sidebar/tab icon-label consistency, icon size/style mix, active-state missing, label truncation
-qa-detect-ux-theme-consistency  = true   # focus color vs theme primary, link color drift, multiple primary hues, status-color misuse
-qa-detect-ux-table-data         = true   # excessive empty space, reverse Sr# numbering, all-empty column, sort indicator mix, action btn gap
-qa-detect-ux-modal-form         = true   # modal title plurality, modal not centered, required-asterisk mix, static text mistaken for field
+qa-detect-ux-spacing            = false   # form field gaps, button group gaps, card padding, heading breathing room   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-affordance         = false   # cursor:pointer, link styling, input borders, focus visible, hover-only controls   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-table-layout       = false   # header width mismatch (dead space), phantom columns, missing sticky/zebra, empty Actions column   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-nav-icons          = false   # sidebar/tab icon-label consistency, icon size/style mix, active-state missing, label truncation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-theme-consistency  = false   # focus color vs theme primary, link color drift, multiple primary hues, status-color misuse   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-table-data         = false   # excessive empty space, reverse Sr# numbering, all-empty column, sort indicator mix, action btn gap   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-modal-form         = false   # modal title plurality, modal not centered, required-asterisk mix, static text mistaken for field   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-overlap            = true   # elements physically overlap (toolbar over table header, calendar text crash, sticky covers content)
-qa-detect-ux-truncation         = true   # header cut mid-word, cell text clipped to 1 char, button/tab/breadcrumb truncation
-qa-detect-ux-active-state       = true   # mixed active styles in same nav (bg vs color), multiple active items, indicator too subtle
+qa-detect-ux-truncation         = false   # header cut mid-word, cell text clipped to 1 char, button/tab/breadcrumb truncation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-active-state       = false   # mixed active styles in same nav (bg vs color), multiple active items, indicator too subtle   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-breadcrumb         = true   # Students > Students duplicate, missing home, current page is link, separator inconsistency
-qa-detect-ux-hover              = true   # button/link/icon no hover state, hover no transition, hover color off theme
-qa-detect-ux-whitespace         = true   # form uses < 50% width, excessive left/right margin, low viewport occupancy, fields stacked
-qa-detect-ux-page-header        = true   # page title before breadcrumb home, title duplicated in breadcrumb, home icon mid-path
-qa-detect-ux-required-state     = true   # required field with red border on load, asterisk-only required, error class no message
-qa-detect-ux-toolbar-consistency = true  # toolbar mixed shadow / size / radius / icon-text style / label casing / border color
-qa-detect-ux-input-width        = true   # input narrow vs container, fixed width on mobile, sibling width mismatch, textarea single-row
-qa-detect-ux-pagination         = true   # no page-size selector for large datasets, no total count, page-number overflow, missing first/last
-qa-detect-ux-selected-color-mix = true   # multiple colors used for 'selected/active' indicators in same widget (today vs month vs date all different)
-qa-detect-ux-card-consistency   = true   # cards on same page mixed border-radius, shadow, border color, width/height; single card with asymmetric padding
-qa-detect-ux-card-usage         = true   # illogical card usage: single-element card, mostly empty card, deep nesting, missing title, actions not in footer
-qa-detect-ux-format-consistency = true   # dates, currencies, numbers, phones, times shown in mixed formats on same page
-qa-detect-ux-media-shape        = true   # avatar shape/size mix, image aspect-ratio variance, decoration mix, logo size drift
-qa-detect-ux-alignment          = true   # breadcrumb baseline drift, label-input baseline drift, icon-text alignment, sibling height mismatch, table cell vertical-align mixed
+qa-detect-ux-hover              = false   # button/link/icon no hover state, hover no transition, hover color off theme   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-whitespace         = false   # form uses < 50% width, excessive left/right margin, low viewport occupancy, fields stacked   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-page-header        = false   # page title before breadcrumb home, title duplicated in breadcrumb, home icon mid-path   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-required-state     = false   # required field with red border on load, asterisk-only required, error class no message   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-toolbar-consistency = false  # toolbar mixed shadow / size / radius / icon-text style / label casing / border color   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-input-width        = false   # input narrow vs container, fixed width on mobile, sibling width mismatch, textarea single-row   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-pagination         = false   # no page-size selector for large datasets, no total count, page-number overflow, missing first/last   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-selected-color-mix = false   # multiple colors used for 'selected/active' indicators in same widget (today vs month vs date all different)   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-card-consistency   = false   # cards on same page mixed border-radius, shadow, border color, width/height; single card with asymmetric padding   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-card-usage         = false   # illogical card usage: single-element card, mostly empty card, deep nesting, missing title, actions not in footer   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-format-consistency = false   # dates, currencies, numbers, phones, times shown in mixed formats on same page   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-media-shape        = false   # avatar shape/size mix, image aspect-ratio variance, decoration mix, logo size drift   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-alignment          = false   # breadcrumb baseline drift, label-input baseline drift, icon-text alignment, sibling height mismatch, table cell vertical-align mixed   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-cross-page-theme   = false   # records per-cell color fingerprints; scripts/check-cross-page-theme.cjs aggregates after the run to flag sidebar/header/theme drift across routes   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-toast-notification = false   # generic toast messages, sentence-fragment toasts, trailing comma, missing role=alert, close-button no label, color-only status badges   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-video                 = true   # <video> responsiveness + controls + YouTube/Vimeo iframe wrappers (v2.6.0, 2026-06-04)
-qa-detect-css-compat            = true   # cross-browser CSS gaps: missing vendor prefixes, Safari traps, var() no-fallback (v2.6.0, 2026-06-04)
+qa-detect-css-compat            = false   # cross-browser CSS gaps: missing vendor prefixes, Safari traps, var() no-fallback (v2.6.0, 2026-06-04)   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-hidden-resources      = true   # desktop-only elements hidden on mobile but still downloading images/iframes (v2.6.0, 2026-06-04)
+qa-detect-ux-chart-render       = true   # chart shows axes/legend but no data marks, orphan tooltips floating with no active point (Fees & Expenses screenshot)
+qa-detect-ux-widget-cramping    = true   # widget title wraps mid-phrase, toolbar buttons overlap title, controls clipped at right edge, header forced onto multiple rows (Calendar widget screenshot)
+qa-detect-ux-empty-state-conflict = true # "Record Not Found" toast/message visible while old result cards still showing, pagination shown on empty state, duplicate stacked toasts (Students filter screenshot)
 
 vision_review                   = true
 
@@ -197,8 +203,8 @@ track_dedup_count_in_summary     = true    # emit dedupCount totals to run-summa
 # rejected, creates no data — and always runs. Happy-path submit (fill VALID data → submit → confirm
 # success) CREATES REAL RECORDS on the target, so it is OFF by default. Turn on only against a dev/sandbox.
 [safe_testing]
-allow_form_submit    = false   # true → qa-form-validation Phase 5 submits valid data to verify the success path. WARNING: creates real records.
-cleanup_after_submit = false   # if the app exposes a delete/undo for the created record, attempt it after a happy-path submit
+allow_form_submit    = true    # true → qa-form-validation Phase 5 + qa-test-crud submit valid data to verify the success path. Creates real records (cleaned up below).
+cleanup_after_submit = true    # if the app exposes a delete/undo for the created record, attempt it after a happy-path submit
 safe_routes          = []      # restrict happy-path submit to these routes only (empty = all forms when allow_form_submit = true)
 
 # Parallelism — ONE browser per (engine × viewport), added 2026-06-04.

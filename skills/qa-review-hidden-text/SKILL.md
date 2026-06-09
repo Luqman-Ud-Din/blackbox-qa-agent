@@ -1,5 +1,6 @@
 ---
 name: qa-review-hidden-text
+section: content
 description: "Reviews text hidden in DOM attributes — placeholders, alt text, title tooltips, aria-labels, input values, and select options — for spelling, grammar, word choice, and untranslated keys. Catches what qa-review-content can't see in document.body.innerText."
 model: sonnet
 applyOn: all
@@ -47,7 +48,7 @@ Interactive Sonnet skill. Same pattern as `qa-review-content`.
 
    ```
    Agent(
-     subagent_type = "qa-review-hidden-text",
+     subagent_type: "general-purpose",
      model         = "sonnet",
      prompt = `You are reviewing text hidden in DOM attributes for content quality issues.
 

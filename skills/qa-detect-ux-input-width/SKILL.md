@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-input-width
+section: visual
 description: "Detects input/select/textarea fields that are too narrow relative to available container width: small input in a wide container, sibling fields with mismatched widths, textarea with same height as a single-line input. Catches the 'why are my inputs so tiny when there's space' bug class."
 model: haiku
 applyOn: all

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-card-consistency
+section: visual
 description: "Detects inconsistencies BETWEEN cards on the same page: mixed border-radius values, some cards with shadow and some without, different border colors, different background tones, mismatched widths in same row, mismatched heights with similar content. Catches the 'these cards look like they're from different design systems' bug class."
 model: haiku
 applyOn: all

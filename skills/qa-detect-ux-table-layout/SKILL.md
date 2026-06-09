@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-table-layout
+section: visual
 description: "Catches table layout UX bugs: header bar narrower than container (dead space on the right), header doesn't align with body columns, last column has header but no body cells, Actions column empty in every row, missing sticky header on long tables. Catches the 'why is there empty space at the end of my table' bug class."
 model: haiku
 applyOn: all

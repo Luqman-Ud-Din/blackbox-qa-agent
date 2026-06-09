@@ -1,5 +1,6 @@
 ---
 name: qa-review-content
+section: content
 description: "Layer 2 of grammar 2-layer strategy. Sonnet judgment for: spelling errors (confirms Layer 1 candidates against full dictionary), grammar, word choice, homophone correctness (grades Layer 1 candidates), awkward phrasing, capitalization, punctuation. Receives proper-noun whitelist from config (never flags brands). Auto-switches to legal/compliance mode on routes matching content.legal_routes (GDPR/CCPA/T&C required-phrase audit)."
 model: sonnet
 applyOn: all
@@ -54,7 +55,7 @@ Triggered automatically when the cell's route path matches a pattern in `automat
 
 ```
 Agent(
-  subagent_type = "qa-review-content",
+  subagent_type: "general-purpose",
   model         = "sonnet",
   prompt = `You are reviewing the visible text of a web page for content quality issues.
 
@@ -124,7 +125,7 @@ Agent(
 
 ```
 Agent(
-  subagent_type = "qa-review-content",
+  subagent_type: "general-purpose",
   model         = "sonnet",
   prompt = `You are auditing a LEGAL/COMPLIANCE page for required phrases and clarity.
 

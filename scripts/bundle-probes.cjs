@@ -132,6 +132,7 @@ for (const name of enabledNames) {
     name,
     model:             fm.model             || 'haiku',
     applyOn,
+    section:           fm.section           || 'uncategorized',
     viewportSensitive: fm.viewportSensitive === true,
     interactive:       fm.interactive       === true,
     needsSetup:        fm.needsSetup        === true,
@@ -140,6 +141,22 @@ for (const name of enabledNames) {
   });
 
   if (!probe) noProbe.push(name);
+}
+
+// ── 4b. Section filter ────────────────────────────────────────────────────
+// `--section interactive` (or `--section interactive,forms`) or env QA_SECTIONS=...
+// limits the bundle to skills tagged with those `section:` values. This is what
+// makes "run only the interactive section" never pull in responsiveness/perf detectors.
+const sectionArg = (process.argv.find(a => a.startsWith('--section=')) || '').split('=')[1]
+                || (process.argv.includes('--section') ? process.argv[process.argv.indexOf('--section') + 1] : '')
+                || process.env.QA_SECTIONS || '';
+const wantSections = sectionArg.split(/[, ]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+if (wantSections.length) {
+  const before = skills.length;
+  for (let i = skills.length - 1; i >= 0; i--) {
+    if (!wantSections.includes((skills[i].section || 'uncategorized').toLowerCase())) skills.splice(i, 1);
+  }
+  console.log(`  🔎 section filter: [${wantSections.join(', ')}] → kept ${skills.length}/${before} skills`);
 }
 
 const passive     = skills.filter(s => s.probe && !s.interactive);

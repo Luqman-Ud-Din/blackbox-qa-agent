@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-actions
+section: visual
 description: "Catches action-button UX problems: destructive actions without confirmation pattern, multiple competing primary CTAs (broken visual hierarchy), disabled buttons without explanation, primary button hidden below the fold. Goes beyond a11y — catches UX intent failures."
 model: haiku
 applyOn: all
@@ -101,6 +102,50 @@ viewportSensitive: true
   }
 
   // ── 3. Disabled button without explanation ────────────────────────────
+  // Helper: is this disabled button STRUCTURALLY disabled by context (boundary case)?
+  // If yes, no tooltip is required — the surrounding UI tells the user why.
+  const isStructurallyDisabled = (b) => {
+    const ariaLabel = (b.getAttribute('aria-label') || '').toLowerCase();
+    const btnText = (b.innerText || b.value || '').trim();
+    // (a) Pagination Next/Prev/First/Last at the boundary
+    const paginationContainer = b.closest(
+      '.pagination, .pager, [class*="pagination"], [class*="paginator"], [class*="Pagination"], ' +
+      '[role="navigation"][aria-label*="page" i], [aria-label*="pagination" i]'
+    );
+    const looksLikePagerArrow = /^[‹›«»<>‍]\s*$|next|prev|previous|first|last|page/.test(ariaLabel) ||
+                                /^[‹›«»<>]$/.test(btnText) ||
+                                (btnText.length <= 2 && /[‹›«»<>]/.test(btnText));
+    if (paginationContainer || looksLikePagerArrow) {
+      // Look in the page for a "Showing 1-N of N" / "Page 1 of 1" / "1 of 1" hint
+      // that indicates we're at a pagination boundary (single page or last page)
+      const wrap = paginationContainer ? paginationContainer.parentElement : (b.closest('.card, [class*="card"], [class*="table"], main, [role="main"]') || document.body);
+      const ctx = (wrap && wrap.innerText) ? wrap.innerText.toLowerCase() : '';
+      // "Showing 1-2 of 2", "1-30 of 2", "page 1 of 1", "showing all"
+      const boundaryHint = /(?:showing\s+)?(\d+)\s*[\-–to]+\s*(\d+)\s+of\s+(\d+)/i.exec(ctx) ||
+                           /page\s+(\d+)\s+of\s+(\d+)/i.exec(ctx);
+      if (boundaryHint) {
+        // Pattern 1: "1-2 of 2" → end == total → last page (Next disabled correctly)
+        if (boundaryHint.length >= 4) {
+          const end = +boundaryHint[2], total = +boundaryHint[3];
+          if (end >= total) return true; // on last page; Next is correctly disabled
+          const start = +boundaryHint[1];
+          if (start === 1 && /prev|previous|first|‹|«|</.test(ariaLabel + btnText)) return true; // on first page; Prev disabled
+        }
+        // Pattern 2: "page 1 of 1" → single page; both arrows correctly disabled
+        if (boundaryHint.length === 3 && +boundaryHint[1] === +boundaryHint[2]) return true;
+      }
+      // "Showing all" / "no more results" — single-page indicator
+      if (/showing\s+all|no\s+more\s+(records|results|pages)/i.test(ctx)) return true;
+    }
+    // (b) Bulk-action buttons (Delete Selected, Archive Selected) disabled when no row is checked
+    if (/delete\s+selected|archive\s+selected|export\s+selected|bulk\s+\w+/i.test(btnText + ' ' + ariaLabel)) {
+      const tableScope = b.closest('main, [role="main"], .card, [class*="card"]') || document.body;
+      const anyChecked = tableScope.querySelector('tbody input[type="checkbox"]:checked, [role="row"] input[type="checkbox"]:checked, [aria-selected="true"]');
+      if (!anyChecked) return true; // nothing selected → correctly disabled
+    }
+    return false;
+  };
+
   let disabledFlagged = 0;
   const disabledBtns = [...document.querySelectorAll('button[disabled], button[aria-disabled="true"], input[disabled][type="submit"], input[disabled][type="button"], [role="button"][aria-disabled="true"]')];
   for (const b of disabledBtns) {
@@ -114,6 +159,8 @@ viewportSensitive: true
     const container = b.closest('.form-group, .field, fieldset, .input-group') || b.parentElement;
     const hasHelp = container && container.querySelector('.help, .help-text, .hint, [class*="help-text"], .form-text');
     if (hasHelp) continue;
+    // Skip structurally-disabled controls (pagination at boundary, bulk actions with no selection)
+    if (isStructurallyDisabled(b)) continue;
     disabledFlagged++;
     const text = (b.innerText || b.value || '').trim().slice(0, 40);
     out.push({

@@ -1,5 +1,6 @@
 ---
 name: qa-detect-typography
+section: visual
 description: "Detects small fonts, tight line-height, clipped text, oversized headings on mobile, and unbreakable long words causing overflow"
 model: haiku
 applyOn: all

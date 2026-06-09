@@ -1,8 +1,9 @@
 ---
 name: qa-detect-dark-mode
+section: visual
 description: "Detects whether the site respects prefers-color-scheme. No dark-mode handling = jarring white flash for dark-mode users"
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 ---

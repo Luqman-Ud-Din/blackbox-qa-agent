@@ -1,5 +1,6 @@
 ---
 name: qa-detect-safe-area
+section: responsiveness
 description: "Detects fixed/sticky elements at the top or bottom of the viewport that don't use env(safe-area-inset-*) — content gets hidden behind iPhone notch / home indicator"
 model: haiku
 applyOn: [mobile]

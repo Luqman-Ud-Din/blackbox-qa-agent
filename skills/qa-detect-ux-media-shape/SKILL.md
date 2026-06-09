@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-media-shape
+section: visual
 description: "Detects inconsistencies in image/avatar/media visuals on the same page: avatars mixing circle / square / rounded shapes, images in same grid with different aspect ratios (16:9 + 4:3 + square), some images bordered/shadowed and others not, logo rendered at different sizes across the page."
 model: haiku
 applyOn: all

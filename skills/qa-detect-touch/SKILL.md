@@ -1,5 +1,6 @@
 ---
 name: qa-detect-touch
+section: responsiveness
 description: "Detects tap targets smaller than 44×44px and interactive elements too close together"
 model: haiku
 applyOn: [mobile, tablet]

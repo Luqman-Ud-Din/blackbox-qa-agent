@@ -1,5 +1,6 @@
 ---
 name: qa-detect-dropdown-viewport-clip
+section: responsiveness
 description: "Tests dropdown / tooltip / autocomplete menus: open each, verify the popup is not clipped at the right or bottom edge of the viewport"
 model: haiku
 applyOn: all
@@ -88,11 +89,18 @@ This skill finds triggers near viewport edges, opens each, measures the popup's 
   let popup = controls ? document.getElementById(controls) : null;
 
   // 2. Look for newly visible role="menu" / role="listbox" / role="tooltip" / [class*=popover]
+  // ALSO check Angular Material CDK overlay portal (attaches to document.body, not near trigger)
   if (!popup) {
     const candidates = document.querySelectorAll(
       '[role="menu"]:not([hidden]), [role="listbox"]:not([hidden]), ' +
       '[role="tooltip"]:not([aria-hidden="true"]), [class*="popover"]:not([aria-hidden="true"]), ' +
-      '[class*="dropdown-menu"]:not([hidden]), [data-state="open"]'
+      '[class*="dropdown-menu"]:not([hidden]), [data-state="open"], ' +
+      // Angular Material CDK overlays
+      '.cdk-overlay-container .mat-select-panel, ' +
+      '.cdk-overlay-container .mat-autocomplete-panel, ' +
+      '.cdk-overlay-container mat-menu, ' +
+      '.cdk-overlay-container [role="listbox"], ' +
+      '.cdk-overlay-pane'
     );
     for (const c of candidates) {
       const r = c.getBoundingClientRect();

@@ -1,8 +1,9 @@
 ---
 name: qa-test-widgets
+section: interactive
 description: "Tests modal open/close, dropdown selection, and row action menus"
 model: haiku
-applyOn: [mobile, tablet, desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true

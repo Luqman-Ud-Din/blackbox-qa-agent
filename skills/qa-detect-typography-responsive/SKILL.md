@@ -1,5 +1,6 @@
 ---
 name: qa-detect-typography-responsive
+section: visual
 description: "Closes the responsive/legibility typography gaps not covered by qa-detect-typography(-advanced): font appropriateness per viewport, fluid (clamp/vw) type scaling, justified-without-hyphens rivers, text over background images without a scrim, px sizing that ignores user font-size preference, and missing tabular figures in numeric tables."
 model: haiku
 applyOn: all

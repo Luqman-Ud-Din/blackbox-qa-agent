@@ -1,5 +1,6 @@
 ---
 name: qa-detect-word-break
+section: responsiveness
 description: "Detects long unbreakable text (URLs, emails, code identifiers) that overflows its container — common with user-generated content and missing overflow-wrap"
 model: haiku
 applyOn: all

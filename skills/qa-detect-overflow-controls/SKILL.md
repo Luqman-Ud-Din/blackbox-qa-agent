@@ -1,5 +1,6 @@
 ---
 name: qa-detect-overflow-controls
+section: responsiveness
 description: "Detects tab strips, segmented controls, and button groups whose children overflow horizontally without a visible scroll affordance"
 model: haiku
 applyOn: all

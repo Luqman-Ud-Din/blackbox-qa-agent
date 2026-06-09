@@ -1,8 +1,9 @@
 ---
 name: qa-detect-breakpoint-edge
+section: responsiveness
 description: "Detects layout bugs at exact CSS breakpoint boundaries by extracting the page's actual @media values and probing at (boundary - 1px) vs (boundary + 1px). Catches CSS transitions that work at 390px and 1440px but break at 767/768 or 1023/1024."
 model: haiku
-applyOn: [desktop]
+applyOn: all
 needsSetup: false
 viewportSensitive: false
 interactive: true

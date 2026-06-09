@@ -1,5 +1,6 @@
 ---
 name: qa-detect-hidden-resources
+section: responsiveness
 description: "Detects desktop-only elements that are CSS-hidden on mobile but still download heavy resources (images, iframes, videos) — wasting mobile bandwidth without improving UX"
 model: haiku
 applyOn: [mobile, tablet]

@@ -50,8 +50,9 @@ const SECRETS = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, '.claude/secr
 const PAT          = process.env.ADO_PAT || process.env.AZURE_DEVOPS_PAT || SECRETS.AZURE_DEVOPS_PAT || SECRETS.ADO_PAT;
 const ORG_NAME     = (CONFIG.ado.org || '').replace('https://dev.azure.com/', '').replace(/\/$/, '');
 const PROJECT_NAME = CONFIG.ado.project;
-const APP          = CONFIG.apps[0].name;
-const BASE_URL     = CONFIG.apps[0].baseUrl;
+const _repairPlan  = (() => { try { return JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'audit-plan.json'), 'utf8')); } catch (_) { return {}; } })();
+const APP          = _repairPlan.app     || (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].name)    || 'app';
+const BASE_URL     = _repairPlan.baseUrl || (CONFIG.apps && CONFIG.apps[0] && CONFIG.apps[0].baseUrl) || '';
 const VIEWPORTS    = CONFIG.responsiveness.viewports;
 
 if (!PAT)          { console.error('No ADO PAT found in env or .claude/secrets.json'); process.exit(1); }

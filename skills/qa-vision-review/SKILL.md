@@ -1,5 +1,6 @@
 ---
 name: qa-vision-review
+section: visual
 description: "AI vision review of screenshots. Catches visual anomalies DOM probes cannot see — cropped UI, broken icons, misaligned elements, modal positioning errors, color-contrast issues, layout breakage, stuck skeletons, and mobile-render bugs. Uses Sonnet vision."
 model: sonnet
 applyOn: all

@@ -1,5 +1,6 @@
 ---
 name: qa-form-input-types
+section: interactive
 description: "Consolidated input-widget testing. Owns every input-type-specific bug: date/time pickers, file upload, OTP boxes, comboboxes, tag inputs, formatted (credit card / phone / CVV), masked inputs, inline-edit, password rules. Replaces 9 overlapping widget skills."
 model: haiku
 applyOn: all

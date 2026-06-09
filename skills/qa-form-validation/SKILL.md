@@ -1,5 +1,6 @@
 ---
 name: qa-form-validation
+section: interactive
 description: "Consolidated form validation skill. Tests BOTH real <form> elements AND form-less input groups (div+inputs+button, the common Angular/React case — so it runs on login/signup/forgot even without a <form> tag). Owns ALL validation testing on EVERY field: required/empty-submit, data-type, size/length, BOUNDARY values (min/max), format/syntax (pattern), CROSS-FIELD (password match, date range, confirm-email), real-time feedback, whitespace, oversize, maxlength, error-summary, aria-describedby, and XSS/SQL/Unicode injection on every field."
 model: haiku
 applyOn: all

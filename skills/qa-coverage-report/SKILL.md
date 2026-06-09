@@ -1,5 +1,6 @@
 ---
 name: qa-coverage-report
+section: pipeline
 description: "Reads issues.jsonl after the audit, writes coverage-report.json, and prints a terminal summary. Does NOT write a markdown file."
 ---
 

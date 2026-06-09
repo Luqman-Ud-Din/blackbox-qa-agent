@@ -1,5 +1,6 @@
 ---
 name: qa-detect-touch-interactions
+section: responsiveness
 description: "Dispatches real TouchEvent (touchstart/touchend) on elements that have hover-only handlers, to detect controls that work with mouse but not with touch. Tests tap, double-tap-to-zoom suppression, swipe gestures."
 model: haiku
 applyOn: [mobile, tablet]

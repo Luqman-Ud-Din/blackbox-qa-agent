@@ -1,5 +1,6 @@
 ---
 name: qa-form-structure
+section: interactive
 description: "Consolidated form structure skill. Owns submit-button presence, input touch-target height on mobile/tablet, full-width form fields on mobile, and structural form HTML. Replaces structural portion of qa-detect-forms."
 model: haiku
 applyOn: all

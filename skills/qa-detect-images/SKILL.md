@@ -1,5 +1,6 @@
 ---
 name: qa-detect-images
+section: visual
 description: "Detects missing alt text, broken images, oversized images, aspect-ratio distortion (stretched), and hero/banner images without object-fit:cover"
 model: haiku
 applyOn: all
@@ -108,22 +109,54 @@ viewportSensitive: false
     }
 
     // 5. Hero image object-fit — large/banner images without object-fit:cover
+    //
+    // CRITICAL: a "hero" image must actually be hero-sized AND not a logo. The
+    // previous selector `header img` matched ANY <img> inside ANY <header>,
+    // including site logos in sidebar/topbar headers. We now require BOTH a
+    // hero-like ancestor class AND minimum size, OR size-only for unclassed cases,
+    // AND skip anything that smells like a logo/brand glyph.
+    const isLogoOrBrand = (img) => {
+      const alt = (img.getAttribute('alt') || '').toLowerCase();
+      if (/^(logo|brand|favicon|icon|avatar|profile)\b/.test(alt)) return true;
+      const cls = ((img.className && typeof img.className === 'string') ? img.className : '').toLowerCase();
+      if (/\b(logo|brand|favicon|avatar)\b/.test(cls)) return true;
+      // Image inside a logo/brand/avatar/nav-icon container
+      const container = img.closest(
+        '[class*="logo"], [class*="Logo"], [class*="brand"], [class*="Brand"], ' +
+        '[class*="avatar"], [class*="Avatar"], [class*="profile-pic"], [class*="favicon"], ' +
+        'nav, aside, [class*="sidebar"], [class*="Sidebar"], [class*="topbar"], [class*="Topbar"], ' +
+        '[class*="navbar"], [class*="NavBar"], [class*="appbar"], [class*="AppBar"]'
+      );
+      if (container) return true;
+      // src filename hints
+      const src = (img.src || '').toLowerCase();
+      if (/(logo|brand|favicon|avatar|profile)[-_]?\w*\.(png|jpe?g|svg|webp)/.test(src)) return true;
+      return false;
+    };
+
     const heroImgs = new Set();
+    // Class-based heroes — but still must be a real-sized image (not a 40px logo
+    // inside a `<header class="page-header">`).
     const heroSelectors = [
       '[class*="hero"] img', '[class*="banner"] img', '[class*="jumbotron"] img',
-      '[class*="cover"] img', 'header img', '[class*="masthead"] img', '[class*="splash"] img'
+      '[class*="masthead"] img', '[class*="splash"] img'
     ];
     for (const hSel of heroSelectors) {
-      for (const hImg of document.querySelectorAll(hSel)) heroImgs.add(hImg);
+      for (const hImg of document.querySelectorAll(hSel)) {
+        const r = hImg.getBoundingClientRect();
+        // Must be at least 40% viewport width AND 120px tall to qualify as hero
+        if (r.width >= innerWidth * 0.4 && r.height >= 120) heroImgs.add(hImg);
+      }
     }
-    // Also treat any large image (≥60% viewport width AND ≥200px tall) as hero
+    // Size-only fallback for unclassed pages: ≥60% viewport width AND ≥200px tall
     for (const img of document.querySelectorAll('img')) {
       const r = img.getBoundingClientRect();
       if (r.width >= innerWidth * 0.6 && r.height >= 200) heroImgs.add(img);
     }
     for (const img of heroImgs) {
       if (out.length >= 20) break;
-      if (img.complete && img.naturalWidth === 0) continue; // already caught as broken
+      if (isLogoOrBrand(img)) continue;                              // skip logos / avatars / nav icons
+      if (img.complete && img.naturalWidth === 0) continue;          // already caught as broken
       const r = img.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
       const s = getComputedStyle(img);

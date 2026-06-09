@@ -1,5 +1,6 @@
 ---
 name: qa-test-mobile-nav
+section: interactive
 description: "Tests hamburger menu / mobile nav drawer: ARIA label, opens, contains visible links, closes on Escape, focus does not leak to background content"
 model: haiku
 applyOn: [mobile, tablet]
@@ -44,7 +45,10 @@ On mobile/tablet, navigation usually lives behind a hamburger button. This skill
     '.hamburger', '[data-testid*="menu-toggle"]', '[data-testid*="nav-toggle"]',
     'button[aria-controls*="menu" i]', 'button[aria-controls*="nav" i]',
     'button[aria-expanded][class*="menu"]', 'button[aria-expanded][class*="nav"]',
-    'button > svg + span:has-text("Menu")'
+    // Angular Material mat-sidenav triggers
+    'button[aria-label*="toggle" i]', 'button[aria-label*="sidenav" i]',
+    '[class*="sidenav-toggle"]', '[class*="menu-toggle"]',
+    'mat-icon[aria-label*="menu" i]', 'button mat-icon'
   ];
   for (const sel of candidates) {
     let el;
@@ -72,7 +76,12 @@ On mobile/tablet, navigation usually lives behind a hamburger button. This skill
     '[class*="drawer"]:not([aria-hidden="true"])',
     '[class*="mobile-nav"]:not([aria-hidden="true"])',
     '[class*="nav-menu"][class*="open"]',
-    '[data-state="open"][class*="nav"]'
+    '[data-state="open"][class*="nav"]',
+    // Angular Material mat-sidenav (opened state)
+    'mat-sidenav[opened]',
+    'mat-sidenav.mat-drawer-opened',
+    'mat-sidenav:not([style*="visibility: hidden"])',
+    '.mat-drawer-opened mat-sidenav'
   ];
   for (const sel of candidates) {
     let el;

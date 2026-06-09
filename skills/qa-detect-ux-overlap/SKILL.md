@@ -1,5 +1,6 @@
 ---
 name: qa-detect-ux-overlap
+section: visual
 description: "Detects visible elements that physically overlap each other on screen — toolbar buttons sitting on top of table headers, calendar text collision, modal partially behind another modal, sticky banner covering content. Catches the 'why are these two things on top of each other' bug class."
 model: haiku
 applyOn: all
