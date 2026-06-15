@@ -3,12 +3,11 @@ name: qa-review-content
 section: content
 description: "Layer 2 of grammar 2-layer strategy. Sonnet judgment for: spelling errors (confirms Layer 1 candidates against full dictionary), grammar, word choice, homophone correctness (grades Layer 1 candidates), awkward phrasing, capitalization, punctuation. Receives proper-noun whitelist from config (never flags brands). Auto-switches to legal/compliance mode on routes matching content.legal_routes (GDPR/CCPA/T&C required-phrase audit)."
 model: sonnet
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
 ---
-
 ## What it checks
 
 Everything that requires judgment over visible page text. This is the Sonnet half of the 2-layer content strategy — Layer 1 (`qa-detect-content-patterns`) finds deterministic patterns and candidates; this layer confirms candidates and grades grammar.

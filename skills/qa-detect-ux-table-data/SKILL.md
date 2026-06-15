@@ -5,7 +5,7 @@ description: "Detects table data-quality UX problems: excessive empty space belo
 model: haiku
 applyOn: all
 needsSetup: false
-viewportSensitive: true
+viewportSensitive: false
 requires: [hasTables]
 ---
 

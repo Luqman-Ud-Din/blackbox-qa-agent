@@ -3,12 +3,11 @@ name: qa-review-hidden-text
 section: content
 description: "Reviews text hidden in DOM attributes — placeholders, alt text, title tooltips, aria-labels, input values, and select options — for spelling, grammar, word choice, and untranslated keys. Catches what qa-review-content can't see in document.body.innerText."
 model: sonnet
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
 ---
-
 ## What it checks
 
 A lot of user-facing text never appears in `document.body.innerText` — it lives in DOM attributes. The companion skill `qa-review-content` skips all of this. This skill closes the gap.

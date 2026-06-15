@@ -5,7 +5,7 @@ description: "Catches table layout UX bugs: header bar narrower than container (
 model: haiku
 applyOn: all
 needsSetup: false
-viewportSensitive: true
+viewportSensitive: false
 requires: [hasTables]
 ---
 

@@ -3,11 +3,10 @@ name: qa-detect-console-errors
 section: performance
 description: "Captures and CLASSIFIES runtime errors during load AND interaction: uncaught exceptions (TypeError/ReferenceError/…), unhandled promise rejections, CSP violations, and console.error — scored by first-party vs third-party origin. Runs in both the deterministic runner and the MCP path."
 model: haiku
-applyOn: all
+applyOn: [laptop]
 needsSetup: true
-viewportSensitive: false
+viewportSensitive: true
 ---
-
 ## What it checks
 Runtime JavaScript errors, captured from FOUR channels (not just `console.error`):
 1. **Uncaught exceptions** — `window.onerror` / `pageerror` (TypeError, ReferenceError, SyntaxError, …)

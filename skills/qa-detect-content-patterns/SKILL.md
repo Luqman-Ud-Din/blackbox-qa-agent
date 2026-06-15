@@ -3,11 +3,10 @@ name: qa-detect-content-patterns
 section: content
 description: "Layer 1 of grammar/content 2-layer strategy. Deterministic Haiku probe. Catches: typos (60-word dict), pluralization, untranslated i18n keys, HTML entities, markdown literal, mojibake, lorem ipsum, TODO leaks, long sentences (>30 words), high reading level (Flesch-Kincaid >12), generic CTA copy, homophone candidates (flag for L2 judgment), suspicious-word misspelling candidates (flag for L2 dictionary check). Lang-scoped — skips non-English regions via lang attribute. Reads proper-noun whitelist from probe input."
 model: haiku
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 ---
-
 ## Why this skill exists
 
 Sonnet review (`qa-review-content`) is non-deterministic — same page produces slightly different findings between runs. That breaks regression tracking.

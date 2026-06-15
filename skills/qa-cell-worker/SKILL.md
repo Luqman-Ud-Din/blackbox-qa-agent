@@ -306,9 +306,14 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
 5. **Run ALL passive probes in ONE TINY call — you send a one-liner, NOT probe source (BUG 1/2/3):**
    ```
    probeResult = mcp__{serverName}__browser_evaluate({
-     function: `() => window.__ARGUS_PROBES.runPassive("{cell.viewportClass}", { route: "{cell.route}", properNouns: {properNounsJson}, fingerprint: {fingerprintJson} })`
+     function: `() => window.__ARGUS_PROBES.runPassive("{cell.viewportClass}", { route: "{cell.route}", properNouns: {properNounsJson}, fingerprint: {fingerprintJson}, leaderViewport: "{leaderViewport}" })`
    })
    // {fingerprintJson} = JSON.stringify(fingerprint) from step 3b above
+   // {leaderViewport} = the run's leader viewport class, given to you by the orchestrator in your dispatch
+   //   prompt (the first of mobile→tablet→laptop→desktop present this run; normally "mobile"). It makes
+   //   the bundle run each viewportSensitive:false skill ONCE — on the leader cell — instead of on all 4
+   //   viewports (an invariant bug is identical at every width). vs:true skills still run on every viewport.
+   //   If for any reason you weren't given {leaderViewport}, pass your own "{cell.viewportClass}" (no gating).
    ```
    The page already has every probe (from step 4b), so this single call runs ALL applicable passive probes in-page and returns the compact `{ skillName: findings[] }` object. **No probe code rides in this call.** That is the whole fix: ~68k tokens of probe source → a 1-line call.
    Log: `[worker {chunkIndex}] cell {cell.id} — runPassive returned {Object.keys(probeResult).length} skill results`
@@ -338,7 +343,7 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
    ```
    `scripts/coverage-gate.cjs` reads this: an interactive skill whose key is present = ran (covered); absent = never driven → re-dispatched. Every interactive skill applicable to this cell MUST have a key here, just as every passive skill must have a key in `{cell.id}-probes.json`. Together the two receipts prove all 92 skills were executed on this cell.
 
-7c. **🚨 CONSOLE + NETWORK RUNTIME ERRORS (MANDATORY — these 2 skills are NOT in the inject bundle, so the in-page batch CANNOT produce them; you MUST drive them here via MCP or they are missed on every cell).** `qa-detect-console-errors` and `qa-detect-network-errors` need real Playwright listeners. Run them per cell AFTER the interactive phase (errors fire on load AND on interaction):
+7c. **🚨 CONSOLE + NETWORK RUNTIME ERRORS — LAPTOP CELL ONLY (MANDATORY on the laptop cell — these 2 skills are NOT in the inject bundle, so the in-page batch CANNOT produce them; you MUST drive them here via MCP or they are missed).** `qa-detect-console-errors` and `qa-detect-network-errors` are now `applyOn:[laptop]` (console/network/runtime errors are viewport-invariant, and the full laptop layout renders the most components and fires the most requests, so it surfaces the most — the collapsed mobile view catches fewer). **If `cell.viewportClass !== 'laptop'`, SKIP this entire step 7c** — no console/network capture, no receipt keys; the coverage gate does not expect these two skills off the laptop cell. On the laptop cell, run them AFTER the interactive phase (errors fire on load AND on interaction):
 
    **A. Console errors** — read BOTH sources and merge:
    ```
@@ -379,13 +384,15 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
 
    • **qa-detect-fluid-sweep** (issueType: `fluidOverflowAtWidth`): for `w in [320,600,900,1100,1440,1920]`: `browser_resize(w, currentH)` → `browser_evaluate` the overflow check `(() => { const de=document.documentElement; return de.scrollWidth > de.clientWidth + 2; })`. For any width that overflows (especially the in-between 600/900/1100), emit ONE `fluidOverflowAtWidth` (medium) `"horizontal overflow at {w}px (between standard breakpoints)"`. Restore original width. Interactive receipt key.
 
+   *(content/spelling skills — `qa-detect-content-patterns`, `qa-review-content`, `qa-review-hidden-text` — moved to the `laptop` cell below: page text/content is fullest on the laptop layout, not the collapsed mobile view where the hamburger/sidebar hide nav + content.)*
+
+   **— On the `laptop` cell ONLY:**
+
    • **qa-detect-content-patterns** (passive; issueTypes incl. `encodingMojibake`, `untranslatedKey`, `htmlEntityLiteral`, `markdownLiteral`, `commonTypo`): run ONE deterministic in-page scan — `browser_evaluate` over visible text nodes for: `�`/mojibake → `encodingMojibake`; a bare i18n key pattern `^[a-z][\w]*\.[\w.]+$` rendered as text → `untranslatedKey`; literal `&amp;`/`&lt;`/`&nbsp;` shown on screen → `htmlEntityLiteral`; literal `**bold**` / `__` markdown → `markdownLiteral`; `lorem ipsum` / `TODO`/`FIXME` → the skill's leak issueType. Emit verbatim, one finding per distinct issueType (count + sample). This is pure pattern-match — do NOT judge style. Passive receipt key (merge into `{cell.id}-probes.json`).
 
    • **qa-review-content** (Sonnet — YOU are a Sonnet worker, so review directly; issueTypes: `spellingError`, `grammarError`, `wordChoice`, `awkwardPhrasing`, `capitalizationInconsistency`, `punctuationError`): `browser_evaluate(() => document.body.innerText.slice(0,4000))`. Flag ONLY unambiguous errors; SKIP any token in `resolvedConfig.content.proper_nouns`; if uncertain, skip. One finding per distinct error with the exact snippet — **never invent**. Interactive receipt key.
 
    • **qa-review-hidden-text** (Sonnet; same issueTypes, but for non-visible text): `browser_evaluate` collecting all `alt` / `title` / `placeholder` / `aria-label` / `<option>` text. Apply the SAME strict spell/grammar check (proper-noun-aware, no invention). Interactive receipt key.
-
-   **— On the `laptop` cell ONLY:**
 
    • **qa-test-cases** (applyOn `[laptop]`): if `{project-root}/.claude/qa-test-cases.md` does NOT exist → interactive receipt key `{"ran":true,"interacted":false,"skipReason":"no qa-test-cases.md defined"}` (a legit precondition-absent skip). If it exists, drive each listed scenario via MCP and emit pass/fail.
 

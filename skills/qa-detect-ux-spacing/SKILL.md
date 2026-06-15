@@ -5,7 +5,7 @@ description: "Catches inconsistent vertical/horizontal spacing — adjacent form
 model: haiku
 applyOn: all
 needsSetup: false
-viewportSensitive: true
+viewportSensitive: false
 ---
 
 ## What it catches — 5 issue types

@@ -3,11 +3,10 @@ name: qa-detect-network-errors
 section: performance
 description: "Captures HTTP 4xx/5xx responses and failed requests during page load"
 model: haiku
-applyOn: all
+applyOn: [laptop]
 needsSetup: true
-viewportSensitive: false
+viewportSensitive: true
 ---
-
 ## What it checks
 HTTP 4xx/5xx responses and failed requests captured during navigation.
 

@@ -5,7 +5,7 @@ description: "Detects affordance UX failures: clickable elements that don't look
 model: haiku
 applyOn: all
 needsSetup: false
-viewportSensitive: true
+viewportSensitive: false
 requires: [hasActionButtons, hasDragDrop, hasToggleSwitches]
 ---
 

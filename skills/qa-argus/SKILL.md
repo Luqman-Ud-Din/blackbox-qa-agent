@@ -799,6 +799,12 @@ The parallelism dimension is the **viewport**. Each (engine × viewportClass) ge
 ```
 viewportClasses = resolvedConfig.viewports.map(v => v.class)     // e.g. [mobile, tablet, laptop, desktop]
 
+// LEADER VIEWPORT (token saver): the first viewport class present this run, in mobile→tablet→laptop→desktop
+// order. viewportSensitive:false skills (invariant — same bug at every width) run ONCE here instead of on
+// all viewports. Passed to every worker so the inject bundle's _applies leader-gates them. MUST match
+// coverage-gate.cjs's leader rule (same vpOrder, first present) so execution and the gate stay consistent.
+leaderViewport = ['mobile','tablet','laptop','desktop'].find(vp => viewportClasses.includes(vp)) || viewportClasses[0]
+
 // serverFor(engine, vpClass): the .mcp.json server name for this combination.
 // "playwright" is reserved as chromium-desktop AND the default server for route discovery / annotation / serial.
 serverFor = (engine, vp) => (engine === "chromium" && vp === "desktop") ? "playwright" : `pw-${engine}-${vp}`
@@ -916,6 +922,7 @@ Run context:
   baseUrl:        "${resolvedConfig.baseUrl}"
   email:          "${email}"        password: (provided securely; mask in all output)
   projectRoot:    "${projectRoot}"
+  leaderViewport: "${leaderViewport}"   // pass this verbatim as ctx.leaderViewport into runPassive (qa-cell-worker Step 5). Makes viewportSensitive:false skills run ONCE on the leader cell, not on all viewports.
   resilience:     ${JSON.stringify(resolvedConfig.resilience)}
 
 🚨 SKILL LIST — use ONLY these. DO NOT use model memory to decide which skills to run.

@@ -3,11 +3,10 @@ name: qa-detect-typography-advanced
 section: visual
 description: "Real typography DEFECTS only (trimmed 2026-06-09 to remove cosmetic/opinion noise): failed web fonts, real WCAG contrast failures, tofu/replacement glyphs, mixed-content (blocked) fonts, and missing/invalid html lang. The ~37 best-practice nitpicks (font-display, preload, baseline-grid, rhythm, payload, widow/measure, px-sizing, etc.) were removed because they are advisories, not bugs."
 model: haiku
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 ---
-
 ## What it catches — 5 REAL defect types only
 
 | issueType | severity | What — and why it's a real defect (not an opinion) |
