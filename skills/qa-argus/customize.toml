@@ -43,7 +43,7 @@ qa-detect-orientation           = true
 qa-detect-dropdown-viewport-clip = true
 qa-detect-sticky-scroll         = true
 qa-detect-modal-viewport-fit    = true
-qa-detect-hover-touch           = true
+qa-detect-hover-touch           = false  # DISABLED 2026-06-15: only emits hoverStylesStuckOnTouch, which fires on ~100% of Angular Material apps (Material ships hundreds of bare :hover rules). Pure noise on desktop-first admin tools.
 qa-detect-overflow-controls     = true
 qa-detect-word-break            = true   # re-enabled 2026-06-05 per user request — overlap with qa-detect-typography is OK; dedup layer handles it
 qa-detect-reduced-motion        = true
@@ -95,7 +95,7 @@ qa-form-flow                    = true   # multi-step wizard, conditional fields
 # Each uses Playwright MCP capabilities (browser_resize, browser_evaluate matchMedia,
 # fullPage + element screenshots, TouchEvent dispatch, fetch interceptor throttle).
 qa-detect-breakpoint-edge       = true   # browser_resize at exact @media boundaries (B-1 vs B+1)
-qa-detect-visual-regression     = true   # pHash baseline diff (fullPage + per-component)
+qa-detect-visual-regression     = false  # DISABLED 2026-06-15: DOM brightness-hash diff is unstable on live-data dashboards (counters/timestamps/status colors shift the hash every run → spurious regressions). No static baseline is set up. pHash baseline diff (fullPage + per-component)
 qa-detect-orientation-flip      = true   # portrait↔landscape via resize, state-loss detection
 qa-detect-adaptive-state        = true   # dark/RM/forced-colors/contrast in one cell via matchMedia
 qa-detect-touch-interactions    = true   # real TouchEvent dispatch (hover-only detection)
@@ -281,3 +281,34 @@ qa-detect-ux-icons = ["iconClippedInButton"]
 # to qa-test-data-controls (interactive, types real keystrokes). Stale runs may still
 # carry the old passive emission; the new interactive emission is unaffected.
 qa-detect-ux-feedback = ["searchNoClearButton"]
+
+# === Noise sweep 2026-06-15 — drop false positives on Angular Material admin dashboards ===
+# These issueTypes flag Material's INTENTIONAL conventions (uppercase chips, status-color
+# palette, elevation hierarchy, no zebra striping, touch-action:manipulation, bare :hover,
+# :focus-visible pseudo-element rings, translateZ(0) compositing) or apply marketing-site
+# rules to an internal admin tool (image srcset, generic CTA copy, homophones on user data),
+# or use flat thresholds that ignore data-grid reality (DOM node count, 13-14px table cells,
+# table-not-responsive without the overflow wrapper). All real functional/a11y/layout bugs are
+# kept. Reversible — delete any line to re-enable that issueType.
+qa-detect-touch-interactions    = ["touchEventIgnored", "doubleTapZoomBlocked"]
+qa-detect-responsive-images     = ["imageNoSrcset", "imageNoMaxWidth"]
+qa-detect-content-patterns      = ["genericCTACopy", "homophoneCandidate"]
+qa-detect-typography-responsive = ["bodyTextTooSmallForViewport", "pxFontSizingDominant"]
+qa-detect-web-vitals            = ["domNodeCountExcessive"]
+qa-detect-reflow                = ["tableNotResponsive"]
+qa-detect-adaptive-state        = ["parallaxOnReducedMotion"]
+qa-detect-mobile-keyboard       = ["noVisualViewportHandling"]
+qa-detect-viewport-units        = ["viewport100vhNotDvh"]
+qa-detect-forced-colors         = ["buttonBorderlessWithBg"]
+qa-detect-ux-theme-consistency  = ["accentColorMixed"]
+qa-detect-ux-card-consistency   = ["cardShadowMixed"]
+qa-detect-ux-toolbar-consistency = ["toolbarLabelCasingMixed", "toolbarTextIconButtonStyleMix"]
+qa-detect-ux-spacing            = ["formFieldGapInconsistent"]
+qa-detect-ux-alignment          = ["iconTextBaselineDrift"]
+qa-detect-ux-symmetry           = ["cardRowEdgeMismatch"]
+qa-detect-ux-nav-icons          = ["navItemHeightInconsistent"]
+qa-detect-ux-selected-color-mix = ["selectedFillVsOutlineMix"]
+qa-detect-ux-hover              = ["buttonNoHoverState", "hoverColorOffTheme"]
+qa-detect-ux-format-consistency = ["numberFormatMixed"]
+qa-detect-ux-media-shape        = ["imageWithoutDimension"]
+qa-detect-ux-affordance         = ["interactiveNoFocusVisible"]
