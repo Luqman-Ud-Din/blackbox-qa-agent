@@ -28,3 +28,15 @@ playwright-report/
 /merge-results.cjs
 /*-results.json
 /cell-*-b*.json
+/cell-*.png
+/*-base.png
+/*-annotated.png
+/page-*.yml
+/console-*.log
+.playwright-mcp/
+/cell-*.json
+/cell-*.jsonl
+/*-passive.json
+/*-parity.json
+/*-probes.json
+/*-interactive*.json

@@ -1,16 +1,140 @@
 {
   "mcpServers": {
-    "playwright":          { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
-    "pw-chromium-mobile":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium", "--device", "iPhone 12"] },
-    "pw-chromium-tablet":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium", "--device", "iPad Air"] },
-    "pw-chromium-laptop":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
-    "pw-firefox-mobile":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },
-    "pw-firefox-tablet":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },
-    "pw-firefox-laptop":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },
-    "pw-firefox-desktop":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },
-    "pw-webkit-mobile":    { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "webkit"] },
-    "pw-webkit-tablet":    { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "webkit"] },
-    "pw-webkit-laptop":    { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "webkit"] },
-    "pw-webkit-desktop":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "webkit"] }
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-chromium-mobile": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--device",
+        "iPhone 12",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-chromium-tablet": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--device",
+        "iPad Air",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-chromium-laptop": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-firefox-mobile": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-firefox-tablet": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-firefox-laptop": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-firefox-desktop": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-webkit-mobile": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-webkit-tablet": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-webkit-laptop": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    },
+    "pw-webkit-desktop": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--isolated",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        ".tmp/.playwright-mcp"
+      ]
+    }
   }
 }
