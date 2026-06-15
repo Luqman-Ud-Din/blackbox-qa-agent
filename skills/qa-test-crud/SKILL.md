@@ -7,7 +7,7 @@ applyOn: [laptop]
 needsSetup: false
 viewportSensitive: true
 interactive: true
-executable: true
+executable: partial
 cacheVersion: "1.0.0"
 requires: [hasAddButton, hasEditButton, hasDeleteButton]
 ---
@@ -88,10 +88,25 @@ async () => {
 
   const rowAction = (row, action) => {
     if (!row) return null;
-    const re = action === 'edit' ? /\b(edit|update|modify|change)\b/i : /\b(delete|remove|destroy|trash)\b/i;
-    const cls = action === 'edit' ? /edit/i : /delete|remove|trash/i;
-    const btns = [...row.querySelectorAll('button, [role="button"], a[role="button"], [class*="icon-button"]')].filter(vis);
-    return btns.find(b => re.test(b.innerText || b.getAttribute('aria-label') || b.title || '') || cls.test(b.className || '')) || null;
+    const re = action === 'edit' ? /\b(edit|update|modify|change|pencil)\b/i : /\b(delete|remove|destroy|trash|bin)\b/i;
+    const cls = action === 'edit' ? /\b(edit|update|pencil)\b/i : /\b(delete|remove|trash|bin)\b/i;
+    // Include ICON-ONLY + custom-element action buttons (e.g. <gf-button title="Edit"><button>…</button></gf-button>,
+    // mat-icon-button, fa-* icons). The label is often on the WRAPPER's title/aria-label, not the inner <button>.
+    const cand = [...row.querySelectorAll('button, [role="button"], a, gf-button, [class*="icon-button"], [class*="action"], [title], mat-icon, i, svg')].filter(vis);
+    const label = el => (
+      (el.innerText || '') + ' ' +
+      (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-tooltip') || '')) + ' ' +
+      ((el.closest && el.closest('[title]') && el.closest('[title]').getAttribute('title')) || '') + ' ' +
+      ((el.closest && el.closest('[aria-label]') && el.closest('[aria-label]').getAttribute('aria-label')) || '')
+    );
+    const klass = el => ((el.className || '').toString() + ' ' + ((el.closest && el.closest('[class]') && el.closest('[class]').className) || '')).toString();
+    const hit = cand.find(b => re.test(label(b)) || cls.test(klass(b)));
+    if (!hit) return null;
+    // Return the actual clickable element (if the match was a wrapper/icon, find the real button/anchor).
+    return hit.matches('button, a, [role="button"]') ? hit
+         : (hit.querySelector && hit.querySelector('button, a, [role="button"]'))
+         || (hit.closest && hit.closest('button, a, [role="button"]'))
+         || hit;
   };
 
   const confirmDialog = () => {
@@ -227,10 +242,27 @@ async () => {
 }
 ```
 
+## MCP steps (executable: partial — the worker drives these after the in-page probe)
+
+The in-page probe tests CREATE, and EDIT/DELETE on its OWN created record **only when that record is visible in the list**. Many apps (Angular / `gf-button` UIs) put Edit behind a row icon that navigates to a separate **`/edit/{id}` route** — a page navigation the in-page probe cannot survive — and the just-created record is often not visible in the current role's list. So when the in-page EDIT was skipped (`crudEditNoButton`, or create not visible), the worker drives a **full Update on an EXISTING row, then RESTORES it**, via MCP:
+
+🚨 **Only when run config allows live mutation.** This performs a REAL write to an existing record and then restores it. Use a NON-KEY free-text column (Description / Remarks / Notes) — NEVER a name / id / amount / date / status that other logic depends on.
+
+1. **Find Edit on an existing row.** Use the row-action rules — icon-only is fine: match `title`/`aria-label`/class on the `<gf-button>` wrapper or button, including inside a `···` overflow menu (open it first if needed). If no row has an Edit affordance → emit `crudEditNoButton` (medium) and stop.
+2. **Capture original state.** Read the target row's cells; pick a safe non-key text field and record its exact current value as `origVal` (also note the row's unique identifier/first cell so you can re-find it).
+3. **Open Edit** → `browser_click` the Edit control → wait for the edit form/route (`/edit/…`) to load (`browser_wait_for`).
+4. **Verify pre-fill.** The form fields should already contain the row's values. If the target field is empty → emit `crudEditFormEmpty` (high) and leave WITHOUT saving (go back). 
+5. **Change + Save (real write).** Set the field to `origVal + " [argus-upd]"` (native setter + input/change). Click Save → wait. If a server/validation error toast appears on valid data → emit `crudUpdateFormFailed` (high) with the error text; go to restore.
+6. **Verify persist.** Return to the list, re-find the row, confirm it shows the changed value. If not → emit `crudEditNotPersisted` (high). If no success toast was shown → emit `crudNoSuccessFeedback` (medium).
+7. **🚨 RESTORE (mandatory).** Open Edit on the same row → set the field back to EXACTLY `origVal` → Save → confirm the list shows `origVal` again. If restore fails, surface it loudly in the worker return (`restoreFailed:true`, field, origVal) so the user can fix it manually — never leave the record altered.
+8. **Receipt.** In `{cell.id}-interactive.json`, set `qa-test-crud` evidence: `{ ran:true, interacted:true, evidence:{ update:{ driven:true, field, origValMasked:true, persisted:<bool>, restored:<bool> } } }`.
+
 ## Issues
 | issueType | severity | what it catches |
 |---|---|---|
 | `crudAddNoButton` | medium | Page has a data list but no visible Add/New/Create button |
+| `crudEditFormEmpty` | high | Edit opened but the row's existing values are NOT pre-filled — user must re-enter everything |
+| `crudUpdateFormFailed` | high | Edit form saved but produced a server/validation error on valid data |
 | `crudAddFormFailed` | high | Add form opened but submit produced a server/validation error on valid data |
 | `crudAddNotPersisted` | high | Add form submitted successfully but new record NOT visible in list after save |
 | `crudEditNoButton` | medium | List has records but no Edit action available on any row |
@@ -245,7 +277,7 @@ async () => {
 ## Hard rules
 
 1. **ALWAYS run the `finally` cleanup** — even on error. The probe deletes only rows whose text contains its own marker. Test data left in the app is worse than a missed finding.
-2. **NEVER touch existing records** — the probe finds/edits/deletes solely by its unique `argus-crud-test…` marker.
+2. **The in-page probe NEVER touches existing records** — it finds/edits/deletes solely by its unique `argus-crud-test…` marker. The ONLY exception is the MCP Update step above, which may edit ONE existing record's non-key text field — and it MUST restore the original value (step 7) and report `restoreFailed` if it cannot. Never change a key/name/id/amount/date/status field.
 3. **NEVER test on empty lists** — self-skips when `dataRows().length === 0`. We only test against pages that already have real data.
 4. **Sonnet model** — form filling and feedback interpretation benefit from judgment in the surrounding orchestration; the probe itself is deterministic.
 5. **One Add/Edit/Delete cycle per cell** — the probe does not loop.

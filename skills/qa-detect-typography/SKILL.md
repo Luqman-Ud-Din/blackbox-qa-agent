@@ -46,10 +46,18 @@ viewportSensitive: true
     if (!decorative && fs < 10) {
       out.push({ issueType:'smallFont', severity:'low', selector:sel(el),
         description:`Text on ${sel(el)} is ${fs}px — below 10px is hard to read for most users (advisory; not a WCAG minimum).`, bbox: bb(el) });
-    } else if (lh && lh/fs < 1.2) {
-      // 2. tightLineHeight
+    } else if (lh && lh/fs < 1.2
+               // line-height ONLY matters when text WRAPS to 2+ lines. A single-line element
+               // (button, label, icon, the "···" kebab menu, table cell, badge) has no line
+               // below to crowd, so a tight ratio is harmless — do NOT flag it.
+               && el.clientHeight >= lh * 1.8                                   // renders as ≥ ~2 lines (actually wraps)
+               && !el.closest('button, a, label, th, summary, [role="button"], [role="menuitem"], [role="tab"], [contenteditable], [class*="btn"], [class*="badge"], [class*="chip"], [class*="tag"], [class*="icon"], [class*="action"], [class*="kebab"], [class*="menu"]')
+               && !/^H[1-6]$/.test(el.tagName)                                  // headings use tight line-height by design
+               && getComputedStyle(el).cursor !== 'pointer'                     // clickable controls aren't body text
+               && (el.innerText || '').trim().split(/\s+/).length >= 8) {        // a real sentence, not a 1–3 word label/glyph
+      // 2. tightLineHeight — multi-line body/paragraph text only (single-line UI is exempt)
       out.push({ issueType:'tightLineHeight', severity:'low', selector:sel(el),
-        description:`Typography issue on ${sel(el)}: line-height/font-size = ${(lh/fs).toFixed(2)} < 1.2`, bbox: bb(el) });
+        description:`Typography issue on ${sel(el)}: line-height/font-size = ${(lh/fs).toFixed(2)} < 1.2 on multi-line text`, bbox: bb(el) });
     }
 
     // 3. textClipped — actual text being cut, not just container overflow.

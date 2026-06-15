@@ -132,9 +132,9 @@ Skills with `requires: []` always run regardless.
     hasSkeletonScreen:    q('[class*=skeleton],[class*=shimmer],[class*=placeholder-glow]'),
 
     // ── CRUD / DATA ACTIONS ────────────────────────────
-    hasAddButton:         q('[class*=btn-add],[class*=add-new],[aria-label*=add i],[aria-label*=create i]'),
-    hasEditButton:        q('[class*=btn-edit],[class*=edit-action],[aria-label*=edit i]'),
-    hasDeleteButton:      q('[class*=btn-delete],[class*=delete-action],[aria-label*=delete i]'),
+    hasAddButton:         q('[class*=btn-add],[class*=add-new],[aria-label*=add i],[aria-label*=create i],[title*=add i],[title*=create i],gf-button[title*=add i],gf-button[title*=create i]'),
+    hasEditButton:        q('[class*=btn-edit],[class*=edit-action],[aria-label*=edit i],[title*=edit i],[title*=update i],gf-button[title*=edit i],gf-button[title*=update i],[class*=fa-edit],[class*=fa-pencil]'),
+    hasDeleteButton:      q('[class*=btn-delete],[class*=delete-action],[aria-label*=delete i],[title*=delete i],[title*=remove i],gf-button[title*=delete i],gf-button[title*=remove i],[class*=fa-trash]'),
     hasExportOption:      re(/export|download csv|export pdf|export report/i),
     hasImportOption:      re(/import|bulk upload|upload file|upload data/i),
     hasPrintOption:       q('[onclick*=print],[class*=btn-print],[aria-label*=print i]'),

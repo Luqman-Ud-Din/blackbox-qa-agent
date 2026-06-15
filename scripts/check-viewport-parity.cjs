@@ -8,7 +8,7 @@
  * desktop/laptop fingerprint but missing (or materially reduced) on mobile — i.e. functionality
  * silently dropped on small screens, NOT merely relocated into a drawer.
  *
- * Emits findings (issueType: featureDroppedOnMobile) appended to issues/parity-findings.jsonl
+ * Emits findings (issueType: featureHiddenOnSmallViewport) appended to issues/parity-findings.jsonl
  * so the existing collapse/annotate/file-bugs pipeline picks them up like any other finding.
  *
  * Usage: node scripts/check-viewport-parity.cjs <runId>
@@ -69,7 +69,7 @@ for (const route of Object.keys(byRoute)) {
         runId: RUN_ID,
         cellId: mobile.cellId,
         skill: 'qa-detect-viewport-parity',
-        issueType: 'featureDroppedOnMobile',
+        issueType: 'featureHiddenOnSmallViewport',
         severity: 'high',
         route,
         viewport: 'mobile',
@@ -87,5 +87,5 @@ const outPath = path.join(ISSUES_DIR, 'parity-findings.jsonl');
 if (findings.length) {
   fs.writeFileSync(outPath, findings.map(f => JSON.stringify(f)).join('\n') + '\n');
 }
-console.log(`check-viewport-parity [${RUN_ID}]: ${Object.keys(byRoute).length} routes compared, ${findings.length} featureDroppedOnMobile finding(s)${findings.length ? ' → parity-findings.jsonl' : ''}.`);
+console.log(`check-viewport-parity [${RUN_ID}]: ${Object.keys(byRoute).length} routes compared, ${findings.length} featureHiddenOnSmallViewport finding(s)${findings.length ? ' → parity-findings.jsonl' : ''}.`);
 process.exit(0);

@@ -1413,7 +1413,7 @@ node "{project-root}/scripts/coverage-gate.cjs" "{runId}"
 
 ##### 5.9.0.4 — Cross-viewport parity pass (MANDATORY when mobile cells ran — emits `qa-detect-viewport-parity`)
 
-`qa-detect-viewport-parity` cannot run in a single cell (it compares desktop vs mobile feature sets). Each cell dumped a fingerprint to `issues/{cellId}-parity.json` (worker Step 7d). This deterministic post-pass groups them by route and emits `featureDroppedOnMobile` where a column/action present on desktop is absent on mobile:
+`qa-detect-viewport-parity` cannot run in a single cell (it compares desktop vs mobile feature sets). Each cell dumped a fingerprint to `issues/{cellId}-parity.json` (worker Step 7d). This deterministic post-pass groups them by route and emits `featureHiddenOnSmallViewport` where a column/action present on desktop is absent on mobile:
 
 ```
 node "{project-root}/scripts/check-viewport-parity.cjs" "{runId}"

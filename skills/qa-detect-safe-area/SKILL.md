@@ -26,6 +26,22 @@ iPhone X+ and modern Android devices have notches, dynamic islands, and home ind
   const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
   const out = [];
 
+  // 🚫 SELF-SKIP when the environment has NO safe area at all. A regular browser — even resized
+  //    to an iPhone width — has ZERO notch/inset: env(safe-area-inset-*) resolves to 0px. The
+  //    "content overlaps the notch/dynamic island" defect can ONLY occur on a real notched device
+  //    (or a device emulation that injects safe-area-insets). Flagging it in a plain browser
+  //    viewport is a false positive — there is no safe area to respect. So measure the ACTUAL
+  //    insets and bail out when they are all zero.
+  const _saProbe = document.createElement('div');
+  _saProbe.style.cssText = 'position:fixed;top:0;left:0;visibility:hidden;padding:' +
+    'env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);';
+  document.documentElement.appendChild(_saProbe);
+  const _ps = getComputedStyle(_saProbe);
+  const _insetSum = ['paddingTop','paddingRight','paddingBottom','paddingLeft']
+    .reduce((s,p) => s + (parseFloat(_ps[p]) || 0), 0);
+  _saProbe.remove();
+  if (_insetSum === 0) return [];   // no real safe area in this environment → nothing to overlap → skip
+
   // 1. Check viewport-fit=cover
   const viewport = document.querySelector('meta[name="viewport"]');
   const viewportContent = viewport ? (viewport.getAttribute('content') || '').toLowerCase() : '';

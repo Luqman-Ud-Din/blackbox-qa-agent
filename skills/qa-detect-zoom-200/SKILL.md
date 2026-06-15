@@ -105,6 +105,24 @@ async () => {
     //    drawer/collapsed nav), its LEFT edge is past the right viewport edge, AND
     //    the page provides NO horizontal scroll to reach it. If the page scrolls
     //    horizontally that is already reported by zoomOverflow (#1) — not double-counted here.
+    // An element is "off-screen" only because its whole PANEL (off-canvas settings drawer,
+    // sidebar, modal, dropdown, collapse) is parked off-screen in its CLOSED state — it opens
+    // on demand, so the control IS reachable. That is NOT a zoom defect. isRendered() doesn't
+    // catch it because the element has size + visibility; the giveaway is that a PANEL ANCESTOR
+    // is itself entirely off-screen / hidden. Skip those. (Fixes the settingSidebar toggle
+    // false positives — closed-drawer contents flagged as "unreachable at zoom".)
+    const inClosedPanel = (node) => {
+      for (let a = node.parentElement; a && a !== document.body; a = a.parentElement) {
+        const acs = getComputedStyle(a);
+        if (a.getAttribute('aria-hidden') === 'true' || a.hasAttribute('hidden') ||
+            acs.display === 'none' || acs.visibility === 'hidden') return true;
+        if (/offcanvas|drawer|sidebar|settingsidebar|side-?panel|slide|\bmodal\b|\bfade\b|dropdown|collapse|popover/i.test((a.className || '').toString())) {
+          const ar = a.getBoundingClientRect();
+          if (ar.width === 0 || ar.left > vw - 4 || ar.right < 4) return true;   // panel itself parked off-screen / closed
+        }
+      }
+      return false;
+    };
     let offCount = 0;
     for (const el of document.querySelectorAll('button, a, input, [role="button"]')) {
       if (offCount >= 15) break;
@@ -112,6 +130,7 @@ async () => {
       const r = el.getBoundingClientRect();
       const clippedRight = r.left > vw - 4;          // left edge at/past right viewport edge
       if (!clippedRight) continue;
+      if (inClosedPanel(el)) continue;               // 🚫 closed off-canvas drawer/panel → reachable when opened, not a zoom defect
       if (hasHScroll) continue;                       // reachable via horizontal scroll → not unreachable
       offCount++;
       out.push({ skill: 'qa-detect-zoom-200', issueType: 'zoomElementUnreachable', severity: 'medium', selector: selFn(el),
