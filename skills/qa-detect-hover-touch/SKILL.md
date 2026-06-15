@@ -6,6 +6,7 @@ model: haiku
 applyOn: [mobile, tablet]
 needsSetup: false
 viewportSensitive: false
+requires: [hasHoverElements]
 ---
 
 ## What it checks

@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasActionButtons, hasToolbar, hasFloatingAction]
 ---
 
 ## What it catches — 6 issue types

@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasVideo, hasAudio]
 ---
 
 ## What it checks

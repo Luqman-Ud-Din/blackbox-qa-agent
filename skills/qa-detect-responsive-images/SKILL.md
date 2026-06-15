@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasImages]
 ---
 
 ## What it checks

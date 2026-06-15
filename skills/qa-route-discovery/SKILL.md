@@ -20,6 +20,43 @@ Run four passes: static manifests, unauthenticated browser, authenticated browse
 
 ---
 
+## 🚨 EXECUTION MANDATE — enforce before any pass
+
+### 1 · MCP check (first action, no exceptions)
+
+Call `browser_navigate(baseUrl + '/')` before starting Pass 0. This single call determines the execution mode for the entire run:
+
+- **Call succeeds** → MCP is available. **Lock into MCP-only mode:**
+  - FORBIDDEN: writing any `.cjs` discovery script under `.tmp/`
+  - FORBIDDEN: calling Node.js / Bash / PowerShell for any route-discovery operation
+  - FORBIDDEN: using `probe.fetchBundleHead` or `probe.fetchBundleTail` — use `probe.extractBundleRoutes` and `probe.extractBundleRoutesTail` exclusively
+- **Call throws / no response** → MCP unavailable → use the Fallback section at the bottom of this skill and nothing else.
+
+The MCP mode and the fallback mode are **mutually exclusive**. Never mix them.
+
+### 2 · Bundle text prohibition (zero exceptions regardless of mode)
+
+JS bundle text (minified, hundreds of KB) **must never appear in the main context window.** This is the single root cause of 9-minute / 24K-token route discovery failures (a 267KB bundle read into context = 123K tokens in one call).
+
+The permanent fix is `probe.extractBundleRoutes`: it fetches the bundle and runs the extraction regex **inside the browser as JavaScript**, then returns only `{ paths: [{path, source}] }` — always < 2KB regardless of bundle size.
+
+Rules enforced at all times:
+- NEVER write bundle text to any file and then call the Read tool on it
+- NEVER pass raw bundle text as a string to a sub-agent
+- NEVER call `probe.fetchBundleHead` or `probe.fetchBundleTail` (both return raw text — they are replaced by the extracting probes)
+- The sub-agent dispatch described in old strategy g is REMOVED — extraction now happens in-browser, no LLM needed per bundle
+
+### 3 · Angular SPA fast-path
+
+Run `probe.detectFramework` immediately after first navigation in Pass 2. If `angular: true`:
+- **Skip** `probe.harvestAnchors` — Angular prod builds have no static `href` on router elements
+- **Skip** `probe.harvestRouterAttrs` — `[routerLink]` is compiled away in production; the DOM attribute does not exist
+- Proceed directly to: expand nav (Pass 2 step 8) → nav-click strategy d → `probe.extractBundleRoutes` strategy g
+
+This removes 2–3 wasted probe calls and the "0 anchors found" false start that drove the old session into multi-iteration fallback loops.
+
+---
+
 ## 🚨 DISCOVERY CONTRACT — a RELENTLESS loop, not a one-pass scan (READ AND FOLLOW FIRST)
 
 The deliverable is a **COMPLETE route set, proven** — never "whatever I found on the first look." The #1 failure mode is **stopping early**: one run finds 19, the next 16, the next 10. That destroys trust. To eliminate it, discovery is a **breadth-first crawl that loops until it can PROVE nothing is left.** This is the law that overrides any per-pass shortcut.
@@ -132,10 +169,8 @@ These probes use `fetch()` inside the current page — no navigation required. T
 
     **g. Bundle string harvest (runs LAST so lazy chunks loaded via strategies a–d are now in `document.scripts`)** —
       i.   `browser_evaluate(probe.listScriptUrls)` — returns up to 10 same-origin script URLs sorted by size
-      ii.  For top 8 URLs (or all if fewer): `browser_evaluate(probe.fetchBundleHead, {url})` — returns up to 600KB of bundle text. **600KB, not 200KB**, because an Angular/lazy route table frequently sits past the 200KB mark of the main chunk — reading too little is why `viaBundle` came back with only a fraction of the real routes (it found a hidden route but missed routes that link nowhere, including the public ones). If a chunk's `totalLength` exceeds what was returned, ALSO read its tail via `probe.fetchBundleTail` (route configs are sometimes appended late) and feed both slices.
-      iii. For each returned chunk, dispatch ONE Sonnet sub-agent. The prompt MUST name the concrete route-definition SHAPES so nothing is skipped:
-           > "This is a chunk of a JavaScript bundle from a SPA. Extract EVERY client-side route path from any router configuration. Look specifically for: Angular `{ path: '...' }`, `loadChildren`, `redirectTo`, nested `children: [...]`; React Router `<Route path=...>` / `path:` in route objects; Vue `{ path: '...' }`; Next.js / SvelteKit file-route strings; TanStack Router. Include AUTH and PUBLIC paths (login, forgot-password, reset-password, onboarding/register) and feature/permission-gated paths even if nothing links to them. **PRESERVE parameter segments exactly as written — keep `:id`, `:slug`, `*`, `[id]`, `{id}` as-is; do NOT invent concrete ids and do NOT drop the param.** Ignore static asset URLs, API endpoints, CSS selectors, regex/i18n keys. Return JSON array only: `[{ path: '/...', source: 'react-router'|'vue-router'|'angular-router'|'next'|'sveltekit'|'unknown' }]`. Cap 120. Output JSON only, no prose."
-      iv.  Merge each returned path into the candidate route set with `source: 'bundle'`. A returned path containing a param segment (`:id`, `[id]`, `{id}`, `*`) is a **detail-route template** — keep it as-is (it satisfies the "get parameterized routes" requirement even when the live UI opens details as modals); Step 3.2 will attach a real `exampleId` if one is reachable, otherwise it stays a template with `exampleId: null` and is flagged, never dropped.
+      ii.  For top 8 URLs (or all if fewer): `browser_evaluate(probe.extractBundleRoutes, {url})` — runs the full extraction regex **inside the browser** and returns only `{ ok, totalLength, paths: [{path, source}] }`. Raw bundle text never enters the main context window. No sub-agent needed — the browser performs the extraction. If `totalLength > 600_000` (bundle larger than the head window), also call `browser_evaluate(probe.extractBundleRoutesTail, {url})` to catch Angular route tables appended late in the chunk; merge the tail paths into the same set.
+      iii. Merge each returned `paths[]` entry into the candidate route set with `source: 'bundle'`. A path containing a param segment (`:id`, `[id]`, `{id}`, `*`) is a **detail-route template** — keep it as-is; Step 3.2 will attach a real `exampleId` if one is reachable, otherwise it stays a template with `exampleId: null` and is flagged, never dropped.
 
 ### Pass 3 — Per-route enrichment
 
@@ -397,33 +432,110 @@ Hard caps for this pass: max 4 expand rounds, max 30 reconcile-clicks, 1.2 s per
 ```
 
 ```js
-// probe.fetchBundleHead — args: { url }. Returns first 600KB of bundle text.
+// probe.extractBundleRoutes — args: { url }
+// Fetches a JS bundle and extracts ALL route paths IN THE BROWSER via regex.
+// Returns ONLY { ok, totalLength, paths:[{path,source}] } — never raw bundle text.
+// Safe for main context: result is always < 2KB regardless of bundle size.
 async ({url}) => {
+  const extract = (text) => {
+    const seen = new Set();
+    const results = [];
+    const add = (p, src) => {
+      p = p.trim();
+      if (!p || seen.has(p)) return;
+      if (p.startsWith('http') || p.includes(' ') || p.length > 120) return;
+      if (/\.(js|css|png|svg|jpg|jpeg|gif|ico|json|map|woff|ttf|eot|otf)(\?|$)/.test(p)) return;
+      if (/^(true|false|null|undefined|\d+)$/.test(p)) return;
+      seen.add(p);
+      results.push({ path: p, source: src });
+    };
+    let m;
+    // Angular / Vue / TanStack Router: { path: '...' }
+    const re1 = /\bpath\s*:\s*["']([^"']{1,120})["']/g;
+    while ((m = re1.exec(text)) !== null) add(m[1], 'angular-router');
+    // loadChildren lazy imports
+    const re2 = /loadChildren\s*:\s*\(\s*\)\s*=>\s*import\s*\(\s*["']([^"']+)["']/g;
+    while ((m = re2.exec(text)) !== null) add('LAZY:' + m[1], 'angular-lazy');
+    // Absolute path strings that look like routes: "/admin/something" or "/:param"
+    const re3 = /["'](\/[a-zA-Z:*][a-zA-Z0-9\-_/:.*{}[\]]*?)["']/g;
+    while ((m = re3.exec(text)) !== null) {
+      const p = m[1];
+      if (p.split('/').length >= 2 && p.length <= 80) add(p, 'bundle-path');
+    }
+    // Next.js / SvelteKit file-route segments with brackets
+    const re4 = /["'](\/[a-zA-Z0-9\-_/[\]()@.]+)["']/g;
+    while ((m = re4.exec(text)) !== null) {
+      const p = m[1];
+      if ((p.includes('[') || p.includes('(')) && p.length <= 80) add(p, 'next-sveltekit');
+    }
+    return results.slice(0, 200);
+  };
   try {
     const r = await fetch(url, { credentials: 'same-origin' });
-    if (!r.ok) return { ok: false, status: r.status, text: '' };
+    if (!r.ok) return { ok: false, status: r.status, paths: [], totalLength: 0 };
     const text = await r.text();
-    return { ok: true, status: 200, text: text.slice(0, 600_000), totalLength: text.length };
+    return { ok: true, status: 200, totalLength: text.length, paths: extract(text.slice(0, 600_000)) };
   } catch (e) {
-    return { ok: false, status: 0, text: '', error: String(e).slice(0, 200) };
+    return { ok: false, status: 0, paths: [], totalLength: 0, error: String(e).slice(0, 200) };
   }
 }
 ```
 
 ```js
-// probe.fetchBundleTail — args: { url }. Returns the LAST 400KB of a bundle larger
-// than the head read. Angular/webpack sometimes append the route table late in the
-// chunk, past the head window — reading the tail recovers those route definitions.
+// probe.extractBundleRoutesTail — args: { url }
+// Like probe.extractBundleRoutes but reads the LAST 400KB.
+// Use only when totalLength > 600_000 — Angular route tables are sometimes appended
+// late in a chunk, past the 600KB head window.
 async ({url}) => {
+  const extract = (text) => {
+    const seen = new Set();
+    const results = [];
+    const add = (p, src) => {
+      p = p.trim();
+      if (!p || seen.has(p)) return;
+      if (p.startsWith('http') || p.includes(' ') || p.length > 120) return;
+      if (/\.(js|css|png|svg|jpg|jpeg|gif|ico|json|map|woff|ttf|eot|otf)(\?|$)/.test(p)) return;
+      if (/^(true|false|null|undefined|\d+)$/.test(p)) return;
+      seen.add(p);
+      results.push({ path: p, source: src });
+    };
+    let m;
+    const re1 = /\bpath\s*:\s*["']([^"']{1,120})["']/g;
+    while ((m = re1.exec(text)) !== null) add(m[1], 'angular-router-tail');
+    const re2 = /["'](\/[a-zA-Z:*][a-zA-Z0-9\-_/:.*{}[\]]*?)["']/g;
+    while ((m = re2.exec(text)) !== null) {
+      const p = m[1];
+      if (p.split('/').length >= 2 && p.length <= 80) add(p, 'bundle-tail');
+    }
+    return results.slice(0, 200);
+  };
   try {
     const r = await fetch(url, { credentials: 'same-origin' });
-    if (!r.ok) return { ok: false, status: r.status, text: '' };
+    if (!r.ok) return { ok: false, status: r.status, paths: [], totalLength: 0 };
     const text = await r.text();
-    if (text.length <= 600_000) return { ok: true, status: 200, text: '', totalLength: text.length, note: 'no tail (already covered by head)' };
-    return { ok: true, status: 200, text: text.slice(-400_000), totalLength: text.length };
+    if (text.length <= 600_000) return { ok: true, status: 200, totalLength: text.length, paths: [], note: 'covered by head' };
+    return { ok: true, status: 200, totalLength: text.length, paths: extract(text.slice(-400_000)) };
   } catch (e) {
-    return { ok: false, status: 0, text: '', error: String(e).slice(0, 200) };
+    return { ok: false, status: 0, paths: [], totalLength: 0, error: String(e).slice(0, 200) };
   }
+}
+```
+
+```js
+// probe.detectFramework — identifies the SPA framework from live DOM/window markers.
+// Run once at the start of Pass 2. Use result to skip probes that are ineffective for
+// the detected framework (e.g. harvestAnchors is useless on Angular prod builds).
+() => {
+  const w = window, d = document, root = d.documentElement;
+  return {
+    angular: !!(d.querySelector('[ng-version]') || d.querySelector('[_nghost-ng-c]') ||
+                root.getAttribute('ng-version') || typeof w.ng !== 'undefined'),
+    react:   !!(typeof w.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined' ||
+                d.querySelector('[data-reactroot]') || d.querySelector('#root')),
+    vue:     !!(typeof w.__vue_devtools_global_hook__ !== 'undefined' ||
+                d.querySelector('[data-v-app]') || d.querySelector('[data-v-]')),
+    next:    !!(typeof w.__NEXT_DATA__ !== 'undefined' || d.querySelector('#__NEXT_DATA__'))
+  };
 }
 ```
 
@@ -720,7 +832,11 @@ Practical expected recall on a single-session crawl: **~98%** for typical SPAs; 
 
 ## Fallback when Playwright MCP is unavailable
 
-When MCP is not detected, the orchestrator MUST use the Write+Run pattern (NOT heredoc — see qa-argus Hard Stop Rule #5).
+**PREREQUISITE — this section applies ONLY when the MCP check at the top of this skill confirmed MCP is unavailable** (i.e. `browser_navigate(baseUrl + '/')` threw or returned no response at the start of the run). If MCP responded, every instruction below is FORBIDDEN for this run. Writing a discovery `.cjs` script while MCP is available was the direct cause of 9-minute / 24K-token route discovery failures and must never happen again.
+
+When MCP is genuinely not detected, the orchestrator MUST use the Write+Run pattern (NOT heredoc — see qa-argus Hard Stop Rule #5).
+
+The fallback discover.cjs script MUST implement `extractRoutes(text)` inline (same regex logic as `probe.extractBundleRoutes`) and MUST write only the extracted `[{path}]` array to routes.json — never the raw bundle text. The same bundle-text-in-context prohibition applies even in fallback mode.
 
 ### Required two-step pattern
 

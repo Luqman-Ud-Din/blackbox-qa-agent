@@ -479,6 +479,29 @@ If `properNouns` is missing, the probe falls back to `[]` and Layer 2 handles br
         description: `Placeholder/test data visible in production: "${jm[0]}".`, snippet: jm[0] }); break; }
     }
 
+    // 19. trailingPeriodOnNumber — stat/metric numbers with a trailing period ("3.", "45.", "0.")
+    // These look like sentence fragments. Common cause: a number formatter appending '.'
+    // accidentally, or CMS content ending a number with a period.
+    const statContainers = document.querySelectorAll('[class*="stat"],[class*="metric"],[class*="kpi"],[class*="count"],[class*="widget"],[class*="summary"],[class*="overview"],[class*="dashboard"]');
+    let numPeriodFlagged = 0;
+    const numPeriodSeen = new Set();
+    for (const container of statContainers) {
+      if (numPeriodFlagged >= 4) break;
+      for (const el of container.querySelectorAll('span,p,div,h1,h2,h3,h4,h5,h6')) {
+        if (numPeriodFlagged >= 4) break;
+        const text = (el.innerText || '').trim();
+        if (/^\d[\d,\s]*\.$/.test(text) && text.length <= 12) {
+          const key = `numperiod|${text}`;
+          if (numPeriodSeen.has(key)) continue;
+          numPeriodSeen.add(key);
+          numPeriodFlagged++;
+          push({ issueType:'trailingPeriodOnNumber', severity:'low', selector:sel(el),
+            description:`Stat number "${text}" has a trailing period — looks like an unfinished sentence. Remove the period or check your number formatter.`,
+            snippet: text });
+        }
+      }
+    }
+
     // 18. Brand / proper-noun casing consistency (DoWeb vs Doweb vs DOWEB)
     for (const brand of (cfg.properNouns || [])) {
       if (!brand || brand.length < 3) continue;

@@ -13,6 +13,7 @@ replaces:
   - qa-detect-form-csrf
   - qa-detect-form-autocomplete
   - qa-detect-form-captcha
+requires: [hasPasswordField, hasLoginForm]
 ---
 
 # qa-form-security — Consolidated Form Security Skill

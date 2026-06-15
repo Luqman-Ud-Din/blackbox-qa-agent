@@ -6,6 +6,7 @@ model: haiku
 applyOn: [mobile]
 needsSetup: false
 viewportSensitive: false
+requires: [hasViewportUnits]
 ---
 
 # qa-detect-viewport-units

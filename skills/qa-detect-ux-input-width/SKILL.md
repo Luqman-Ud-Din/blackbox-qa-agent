@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasInputs]
 ---
 
 ## What it catches — 5 issue types

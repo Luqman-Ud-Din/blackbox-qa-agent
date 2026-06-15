@@ -205,16 +205,22 @@ function drawLabel(img, bb, label, scale) {
 }
 
 // ── Resolve the base PNG for a cell. ─────────────────────────────────────────
-// Tries three locations in order:
+// Tries four locations in order:
 //   1. Canonical:  {project-root}/.tmp/{runId}/screenshots/{cellId}-base.png
-//   2. From JSONL: the screenshotPath field stored in the first finding (may be
+//   2. No-suffix:  {project-root}/.tmp/{runId}/screenshots/{cellId}.png
+//      (older runs / manual sessions save without the -base suffix)
+//   3. From JSONL: the screenshotPath field stored in the first finding (may be
 //      an absolute path from a different install location or working directory)
-//   3. Basename reconstruction: PROJECT_ROOT/.tmp/{runId}/screenshots/{basename}
+//   4. Basename reconstruction: PROJECT_ROOT/.tmp/{runId}/screenshots/{basename}
 // This handles the case where the model saved the screenshot to a wrong absolute
-// path (old install dir, wrong CWD) — the file still exists at that path.
+// path (old install dir, wrong CWD, or no -base suffix) — the file still exists.
 function resolveBasePng(cellId, findings) {
   const canonical = path.join(SHOTS_DIR, `${cellId}-base.png`);
   if (fs.existsSync(canonical)) return canonical;
+
+  // Fallback: screenshot saved without the -base suffix (manual sessions, older runs)
+  const noSuffix = path.join(SHOTS_DIR, `${cellId}.png`);
+  if (fs.existsSync(noSuffix)) return noSuffix;
 
   const stored = findings[0] && findings[0].screenshotPath;
   if (stored) {

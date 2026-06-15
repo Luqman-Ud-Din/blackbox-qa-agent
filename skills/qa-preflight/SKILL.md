@@ -122,6 +122,16 @@ for engine in resolvedConfig.browsers:
 - Write `.mcp.json` with exactly those servers (Write tool — it is a data file, NOT a script). Each entry:
   `"<name>": { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "<engine>"] }`
   (add `"--headless"` to args when `[parallelism].headed = false`).
+
+  **Device emulation (named devices):** For each viewport that has a `name` but NO explicit `width`/`height` in `automation.config.json`, the viewport is a named Playwright device (e.g. "iPhone 12", "iPad Air"). Add `"--device", "<viewport.name>"` to that server's args so Playwright sets the correct UA, touch support, pixel ratio, and viewport size automatically:
+  ```
+  // viewport has name only (no width/height) → device emulation
+  args: ["@playwright/mcp@latest", "--isolated", "--browser", "<engine>", "--device", "<viewport.name>"]
+
+  // viewport has explicit width+height → plain browser, worker calls browser_resize
+  args: ["@playwright/mcp@latest", "--isolated", "--browser", "<engine>"]
+  ```
+  This is what makes mobile audits use a real iPhone UA and touch model instead of a desktop browser resized to 390px.
 - Then HARD STOP with a restart message (MCP servers load only at startup):
   ```
   🔁 Browser pool updated for your selection ({browsers} × {viewports} = {N} browsers).

@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasCards, hasKPICards, hasDashboardTiles]
 ---
 
 ## What it catches — 4 issue types

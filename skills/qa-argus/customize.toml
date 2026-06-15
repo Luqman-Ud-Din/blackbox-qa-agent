@@ -38,7 +38,7 @@ qa-detect-network-errors        = true
 qa-detect-reflow                = true
 qa-detect-breakpoint-boundary   = true
 qa-detect-zoom-200              = true
-qa-detect-responsive-images     = true
+qa-detect-responsive-images     = false   # DISABLED 2026-06-09: optimization nags (srcset/oversize/retina), not real defects
 qa-detect-orientation           = true
 qa-detect-dropdown-viewport-clip = true
 qa-detect-sticky-scroll         = true
@@ -47,7 +47,7 @@ qa-detect-hover-touch           = true
 qa-detect-overflow-controls     = true
 qa-detect-word-break            = true   # re-enabled 2026-06-05 per user request — overlap with qa-detect-typography is OK; dedup layer handles it
 qa-detect-reduced-motion        = true
-qa-detect-forced-colors         = true
+qa-detect-forced-colors         = false   # DISABLED 2026-06-10: Windows High-Contrast-Mode nags (borderless buttons, colored icons) fire on normal design, not real bugs
 qa-detect-viewport-meta         = true
 qa-detect-safe-area             = true
 qa-detect-rtl-layout            = true
@@ -70,6 +70,13 @@ qa-test-i18n                    = true
 qa-test-theme                   = true
 qa-test-cases                   = true
 qa-test-crud                    = true   # full create→edit→delete cycle with cleanup (needs allow_form_submit=true)
+# Previously ORPHANED (existed as skills but were not listed here, so the bundler never saw them — wired in 2026-06-11)
+qa-test-export                  = true   # export buttons (CSV/PDF/Excel) trigger a download and the file is non-empty
+qa-test-filter-accuracy         = true   # after applying a filter, the remaining rows actually match the filter
+qa-test-workflow                = true   # multi-step end-to-end workflows (wizard → submit → confirm)
+qa-test-permissions             = false  # needs ≥2 user roles/accounts to compare access — enable only when extra creds are configured
+qa-test-upload-e2e              = false  # real file upload; creates data on the target — enable only against a sandbox
+# qa-vision-review is NOT toggled here — it is gated by `vision_review` below and runs as Step 6 (screenshot vision), not a probe.
 
 # --- Content review skills ---
 qa-review-content               = true
@@ -109,27 +116,27 @@ qa-detect-web-vitals            = true   # 6 vitals + long-tasks + DOM-size + ma
 # icon UX, action button quality, feedback gaps, spacing consistency, affordance.
 # Each is a deterministic browser probe — runs in the batched Haiku call.
 qa-detect-ux-symmetry           = false   # left/right padding, card edge mismatch, viewport centering   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-icons              = false   # icon-only buttons w/o tooltip, ambiguous icons, size/duplicates/color-only   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-actions            = false   # destructive without confirm, multiple primary CTAs, disabled without explanation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-icons              = true   # icon-only buttons w/o tooltip, ambiguous icons, size/duplicates/color-only   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
+qa-detect-ux-actions            = true   # destructive without confirm, multiple primary CTAs, disabled without explanation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-feedback           = true   # empty states, modal close/ESC, search clear, loading indicators
 qa-detect-ux-spacing            = false   # form field gaps, button group gaps, card padding, heading breathing room   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-affordance         = false   # cursor:pointer, link styling, input borders, focus visible, hover-only controls   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-table-layout       = false   # header width mismatch (dead space), phantom columns, missing sticky/zebra, empty Actions column   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-affordance         = true   # cursor:pointer, link styling, input borders, focus visible, hover-only controls   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
+qa-detect-ux-table-layout       = true   # header width mismatch (dead space), phantom columns, missing sticky/zebra, empty Actions column   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-nav-icons          = false   # sidebar/tab icon-label consistency, icon size/style mix, active-state missing, label truncation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-theme-consistency  = false   # focus color vs theme primary, link color drift, multiple primary hues, status-color misuse   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-table-data         = false   # excessive empty space, reverse Sr# numbering, all-empty column, sort indicator mix, action btn gap   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-modal-form         = false   # modal title plurality, modal not centered, required-asterisk mix, static text mistaken for field   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-table-data         = true   # excessive empty space, reverse Sr# numbering, all-empty column, sort indicator mix, action btn gap   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
+qa-detect-ux-modal-form         = true   # modal title plurality, modal not centered, required-asterisk mix, static text mistaken for field   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-overlap            = true   # elements physically overlap (toolbar over table header, calendar text crash, sticky covers content)
-qa-detect-ux-truncation         = false   # header cut mid-word, cell text clipped to 1 char, button/tab/breadcrumb truncation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-truncation         = true   # header cut mid-word, cell text clipped to 1 char, button/tab/breadcrumb truncation   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-active-state       = false   # mixed active styles in same nav (bg vs color), multiple active items, indicator too subtle   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-breadcrumb         = true   # Students > Students duplicate, missing home, current page is link, separator inconsistency
 qa-detect-ux-hover              = false   # button/link/icon no hover state, hover no transition, hover color off theme   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-whitespace         = false   # form uses < 50% width, excessive left/right margin, low viewport occupancy, fields stacked   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-page-header        = false   # page title before breadcrumb home, title duplicated in breadcrumb, home icon mid-path   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-required-state     = false   # required field with red border on load, asterisk-only required, error class no message   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-required-state     = true   # required field with red border on load, asterisk-only required, error class no message   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-toolbar-consistency = false  # toolbar mixed shadow / size / radius / icon-text style / label casing / border color   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-input-width        = false   # input narrow vs container, fixed width on mobile, sibling width mismatch, textarea single-row   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-pagination         = false   # no page-size selector for large datasets, no total count, page-number overflow, missing first/last   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-pagination         = true   # no page-size selector for large datasets, no total count, page-number overflow, missing first/last   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-ux-selected-color-mix = false   # multiple colors used for 'selected/active' indicators in same widget (today vs month vs date all different)   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-card-consistency   = false   # cards on same page mixed border-radius, shadow, border color, width/height; single card with asymmetric padding   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-card-usage         = false   # illogical card usage: single-element card, mostly empty card, deep nesting, missing title, actions not in footer   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
@@ -137,7 +144,7 @@ qa-detect-ux-format-consistency = false   # dates, currencies, numbers, phones, 
 qa-detect-ux-media-shape        = false   # avatar shape/size mix, image aspect-ratio variance, decoration mix, logo size drift   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-alignment          = false   # breadcrumb baseline drift, label-input baseline drift, icon-text alignment, sibling height mismatch, table cell vertical-align mixed   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-ux-cross-page-theme   = false   # records per-cell color fingerprints; scripts/check-cross-page-theme.cjs aggregates after the run to flag sidebar/header/theme drift across routes   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
-qa-detect-ux-toast-notification = false   # generic toast messages, sentence-fragment toasts, trailing comma, missing role=alert, close-button no label, color-only status badges   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
+qa-detect-ux-toast-notification = true   # generic toast messages, sentence-fragment toasts, trailing comma, missing role=alert, close-button no label, color-only status badges   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect  # RE-ENABLED 2026-06-09: real defects kept via [keep_issuetypes]
 qa-detect-video                 = true   # <video> responsiveness + controls + YouTube/Vimeo iframe wrappers (v2.6.0, 2026-06-04)
 qa-detect-css-compat            = false   # cross-browser CSS gaps: missing vendor prefixes, Safari traps, var() no-fallback (v2.6.0, 2026-06-04)   # DISABLED 2026-06-09: cosmetic/opinion noise, not a real defect
 qa-detect-hidden-resources      = true   # desktop-only elements hidden on mobile but still downloading images/iframes (v2.6.0, 2026-06-04)
@@ -221,12 +228,56 @@ headed = true    # browsers visible (the .mcp.json default — no --headless fla
 navigate_timeout_ms     = 15000   # browser_navigate hard cap
 navigate_wait_until     = "domcontentloaded"  # NEVER use "networkidle" — polling SPAs never reach it
 post_navigate_settle_ms = 1500    # short settle after domcontentloaded
+data_ready_max_ms       = 8000    # extra wait for SPA data fetches (Angular/React/Vue) — caps the
+                                  # smart poll that watches for loading-spinner disappearance OR
+                                  # rendered rows OR explicit empty-state. Bump to 12000 if your
+                                  # app's API is slow; lower to 4000 if data renders fast and you
+                                  # want shorter audits. See qa-cell-worker Step 2 "WAIT-FOR-DATA-READY".
 evaluate_timeout_ms     = 8000    # browser_evaluate per probe
 mcp_call_total_ms       = 20000   # any single MCP call ceiling
 cell_total_ms           = 90000   # ENTIRE cell must complete in 90s
 cell_max_retries        = 1       # retry failed cell once before giving up
 batch_size              = 12      # chunk audit into N-cell Sonnet dispatches (prevents 10-min API timeout)
+cells_per_worker        = 8       # MAX cells a single worker Agent call may handle. A (engine×viewport)
+                                  # with MORE cells than this is dispatched in SEQUENTIAL WAVES — each wave
+                                  # a FRESH Agent call (fresh context). This is the fix for "full-site audit
+                                  # drops interactive skills": a worker holding 34 cells runs out of context
+                                  # by cell ~10 and silently stops driving the 35 interactive skills (it keeps
+                                  # only the cheap one-shot passive probe batch). Capping cells-per-worker
+                                  # keeps every worker's context small enough to drive EVERY skill on EVERY
+                                  # cell. Lower to 6 on slow/heavy apps; raise to 12 only on tiny sites.
 network_capture_cap     = 100     # browser_network_requests() result truncated to this many entries
 stream_writes           = true    # write findings JSONL per-skill, not per-cell (prevents data loss on hang)
 preflight_url_health    = true    # HEAD baseUrl with 5s timeout before audit starts
 coverage_max_retries    = 2       # Step 5.9 finish-gate: re-run missing (cell × skill) pairs up to N times before marking them degraded
+
+# === keep_issuetypes (added 2026-06-09) =============================================
+# These skills mix a few REAL defects with cosmetic noise. Instead of disabling them
+# wholesale (which lost the real bugs), re-enable them but emit ONLY these issueTypes.
+# The deterministic runner (run-passive-probes.cjs) drops every other issueType from them.
+[keep_issuetypes]
+qa-detect-typography = ["smallFont", "oversizedHeading", "longWordNoBreak"]
+qa-detect-images = ["missingAlt", "brokenImage", "imageStretched"]
+qa-detect-ux-truncation = ["headerTextTruncatedMidWord", "cellContentTruncatedToCharacter", "buttonTextEllipsised", "tabLabelTruncated"]
+qa-detect-ux-actions = ["destructiveNoConfirm"]
+qa-detect-ux-pagination = ["paginationNoPageSizeSelector", "paginationPageNumbersOverflow"]
+qa-detect-ux-toast-notification = ["toastCloseButtonNoLabel", "statusColorOnlySignal"]
+qa-detect-ux-affordance = ["interactiveNoFocusVisible", "hoverOnlyControl"]
+qa-detect-ux-required-state = ["requiredFieldErrorOnLoad", "errorClassNoErrorMessage"]
+qa-detect-ux-table-data = ["tableColumnAllEmpty", "tableSerialColumnReversed"]
+qa-detect-ux-table-layout = ["tableHeaderBodyWidthMismatch", "tableActionsColumnEmpty"]
+qa-detect-ux-modal-form = ["modalTitleSingularPluralMismatch", "formStaticTextLooksLikeField"]
+qa-detect-ux-icons = ["iconClippedInButton"]
+
+# === drop_issuetypes (added 2026-06-11) ============================================
+# DENY-LIST mode (opposite of [keep_issuetypes]). For each skill, list the issueTypes
+# you want to drop while keeping everything else from that skill. Useful when a
+# normally-good skill emits one or two specific false positives, OR when an issue
+# type has migrated to a different skill but stale runs still contain it under the
+# old skill name. apply-keep-issuetypes.cjs treats [drop_issuetypes] as the highest
+# priority: a (skill, issueType) match here is dropped regardless of [keep_issuetypes].
+[drop_issuetypes]
+# Migrated 2026-06-11: searchNoClearButton moved from qa-detect-ux-feedback (passive)
+# to qa-test-data-controls (interactive, types real keystrokes). Stale runs may still
+# carry the old passive emission; the new interactive emission is unaffected.
+qa-detect-ux-feedback = ["searchNoClearButton"]

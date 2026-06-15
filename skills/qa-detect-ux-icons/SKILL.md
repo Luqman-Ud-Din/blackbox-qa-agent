@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasIcons]
 ---
 
 ## What it catches — 9 issue types
@@ -50,8 +51,36 @@ viewportSensitive: false
   let nooTooltipFlagged = 0, ambiguousFlagged = 0;
   const ambiguousIcons = /^(more|menu|kebab|dots|three-dots|ellipsis|arrow|chevron|caret|swap|exchange|sort)$/i;
 
+  // Skip elements that are clearly logos / brand glyphs / home links — these are NOT
+  // "icon-only action buttons" even when they have only an image inside.
+  const isLogoOrBrandLink = (el) => {
+    // (a) href points to home/root
+    const href = (el.getAttribute('href') || '').trim();
+    if (href === '/' || href === '#' || href === '/home' || href === '/dashboard' || href === '#/') return true;
+    // (b) any ancestor up to 4 levels has a logo/brand-shaped class
+    if (el.closest('[class*="logo"], [class*="Logo"], [class*="brand"], [class*="Brand"], [class*="navbar-brand"], [class*="sidebar-brand"], [class*="app-bar"], [class*="appbar"]')) return true;
+    // (c) the inner image is a logo (alt text or src filename)
+    const inner = el.querySelector('img, svg');
+    if (inner) {
+      const alt = (inner.getAttribute('alt') || '').toLowerCase();
+      const src = (inner.getAttribute('src') || '').toLowerCase();
+      if (/^(logo|brand|favicon|app\s*logo|site\s*logo)\b/.test(alt)) return true;
+      if (/\/(logo|brand|favicon)[-_]?[\w-]*\.(png|jpe?g|svg|webp)/.test(src)) return true;
+      const cls = ((inner.className && typeof inner.className === 'string') ? inner.className : '').toLowerCase();
+      if (/\b(logo|brand|favicon)\b/.test(cls)) return true;
+    }
+    // (d) link is positioned in the top-left of the page AND contains an image (classic logo slot)
+    const r = el.getBoundingClientRect();
+    if (r.left < 240 && r.top < 80 && el.querySelector('img, svg')) {
+      // Top-left corner of a typical sidebar/header layout → almost always a logo
+      return true;
+    }
+    return false;
+  };
+
   for (const el of interactives) {
     if (!visible(el)) continue;
+    if (isLogoOrBrandLink(el)) continue;   // skip site logo / brand link
     const text = (el.innerText || el.value || '').trim();
     const ariaLabel = (el.getAttribute('aria-label') || '').trim();
     const ariaLabelledBy = (el.getAttribute('aria-labelledby') || '').trim();

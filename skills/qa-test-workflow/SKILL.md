@@ -1,18 +1,26 @@
 ---
 name: qa-test-workflow
 section: interactive
-description: "Tests status-transition workflows: finds records with actionable status buttons (Approve, Reject, Submit, Archive, Activate, Complete), clicks the action, verifies the status changed in the UI. Catches broken approval flows, stuck state machines, and missing confirmation feedback."
+description: "Tests status-transition workflows: finds records with actionable status buttons (Approve, Reject, Submit, Archive, Activate, Complete), clicks the action, verifies the status changed in the UI. DETECTION (actionable records, status indicators, bulk controls) and post-action VERIFICATION (status changed? feedback shown? dialog dismissed?) run as in-page async probes; the action click + any confirmation click stay as MCP steps. Catches broken approval flows, stuck state machines, and missing confirmation feedback."
 model: sonnet
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
+executable: partial
 cacheVersion: "1.0.0"
+requires: [hasWorkflowProcess, hasWizardFlow, hasApprovalActions]
 ---
-
 # qa-test-workflow — Status Transition / Approval Flow Testing
 
 Foundation management apps, HR systems, and any app with approval pipelines depend on status transitions. This skill tests that clicking Approve/Reject/Submit/Archive actually changes the record's status — not just that the button exists.
+
+## How the orchestrator runs this (probe + action MCP clicks)
+
+🚨 This skill is **`executable: partial`**. Triggering a real status transition often goes through trusted click handlers + confirmation dialogs + async API calls; the click itself stays as an MCP `browser_click` so the SPA honors it. Everything else — discovering actionable records, reading the current status, checking the confirmation dialog, checking feedback, and re-reading the status afterward — is in-page.
+
+1. ONE discovery probe: `pageState = browser_evaluate(probe, {mode:'discover'})`. It self-skips (`_stateForMcp.found=false`, returns `[]`) when no status-action buttons exist, and may emit `workflowNoStatusIndicator` / `workflowBulkActionMissing`.
+2. For each action (max 3, non-destructive first) run **## MCP steps (transition)**, calling the probe in `status` / `confirm` / `feedback` modes around the click.
 
 ## What it checks (6 issue types)
 
@@ -27,250 +35,134 @@ Foundation management apps, HR systems, and any app with approval pipelines depe
 
 ## Self-skip conditions
 
-Skip if page has NONE of these status action patterns:
+The `discover` probe returns `_stateForMcp.found=false` when the page has NONE of these status action patterns:
 ```
-button:has-text(/approve|reject|submit|archive|activate|complete|publish|close|reopen|restore/i),
+button[approve|reject|submit|archive|activate|complete|publish|close|reopen|restore],
 [aria-label*="approve" i], [aria-label*="reject" i], [aria-label*="submit" i],
 [class*="approve-btn"], [class*="reject-btn"], [class*="status-action"],
 mat-chip[color="warn"], mat-chip[color="accent"]
 ```
 
-## Orchestrator flow
-
-### Step 1 — Find actionable records
-
-```
-pageState = browser_evaluate(probe.discoverWorkflowPage)
-```
-
-Returns `{found, actions: [{selector, label, recordSelector, currentStatus}], hasBulkCheckboxes}`.
-
-If `found` is false → self-skip.
-
-### Step 2 — For each action (max 3, non-destructive first):
-
-Priority order: `approve` > `submit` > `activate` > `complete` > `archive` > `reject` > `delete`.
-Always attempt reversible actions (Approve, Activate) before irreversible ones (Archive, Delete).
-
-```
-For each action in actions (max 3):
-  a. Capture the current status text of the record:
-     statusBefore = browser_evaluate(probe.readRecordStatus, {recordSelector: action.recordSelector})
-
-  b. browser_click(selector=<action.selector>)
-  c. browser_wait_for(time=600)
-
-  d. confirmState = browser_evaluate(probe.checkConfirmationDialog)
-  e. If confirmState.dialogFound:
-     - browser_click(selector=<confirmState.confirmSelector>)
-     - browser_wait_for(time=800)
-     - confirmDismissed = browser_evaluate(probe.checkConfirmationDialog)
-     - If confirmDismissed.dialogFound → emit workflowConfirmDialogBroken (high); continue
-
-  f. browser_wait_for(time=600)
-
-  g. feedback = browser_evaluate(probe.checkActionFeedback)
-  h. If !feedback.hasSuccess AND !feedback.hasError:
-     → emit workflowNoConfirmFeedback (medium)
-
-  i. statusAfter = browser_evaluate(probe.readRecordStatus, {recordSelector: action.recordSelector})
-  j. If statusAfter.statusText === statusBefore.statusText:
-     → emit workflowTransitionFailed (high)
-       evidence: {action: action.label, statusBefore: statusBefore.statusText, statusAfter: statusAfter.statusText}
-```
-
-### Step 3 — Check status indicators
-
-```
-statusCheck = browser_evaluate(probe.checkStatusIndicators)
-If statusCheck.hasActionButtons AND !statusCheck.hasStatusLabels:
-  → emit workflowNoStatusIndicator (medium)
-```
-
-### Step 4 — Check reverse action on irreversible status (optional)
-
-Only if an "Archive" or "Reject" action was tested and succeeded:
-```
-reverseCheck = browser_evaluate(probe.checkReverseBlocked, {lastAction: 'archive'})
-If reverseCheck.reverseButtonEnabled:
-  → emit workflowReverseNotBlocked (medium)
-    evidence: {reverseButtonSelector: reverseCheck.selector}
-```
-
-### Step 5 — Check bulk action controls
-
-```
-If pageState.hasBulkCheckboxes:
-  bulkCheck = browser_evaluate(probe.checkBulkActions)
-  If !bulkCheck.hasBulkStatusControls:
-    → emit workflowBulkActionMissing (low)
-```
-
-## Probes (browser_evaluate)
+## Interactive Probe (browser_evaluate, async)
 
 ```js
-// probe.discoverWorkflowPage
-() => {
+async (args) => {
+  const out = [];
+  const add = o => out.push(Object.assign({ skill: 'qa-test-workflow' }, o));
   const norm = t => (t || '').toLowerCase().trim();
-  const actionLabels = /\b(approve|reject|submit|archive|activate|complete|publish|close|reopen|restore)\b/i;
+  const visW = e => { const r = e.getBoundingClientRect(); return r.width > 0 && getComputedStyle(e).display !== 'none'; };
+  args = args || {};
 
-  // Find all visible status action buttons
-  const allBtns = [...document.querySelectorAll(
-    'button, [role="button"], a[role="button"], mat-button, [mat-button], [mat-raised-button], [mat-stroked-button]'
-  )].filter(el => {
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && !el.disabled;
-  });
+  // ── DISCOVER mode (default): find actionable records + status indicators + bulk controls ──
+  if (!args.mode || args.mode === 'discover') {
+    const actionLabels = /\b(approve|reject|submit|archive|activate|complete|publish|close|reopen|restore)\b/i;
+    const allBtns = [...document.querySelectorAll('button, [role="button"], a[role="button"], mat-button, [mat-button], [mat-raised-button], [mat-stroked-button]')]
+      .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.disabled; });
+    const actionBtns = allBtns.filter(btn => actionLabels.test(norm(btn.innerText) + ' ' + norm(btn.getAttribute('aria-label'))));
 
-  const actionBtns = allBtns.filter(btn => actionLabels.test(norm(btn.innerText) + ' ' + norm(btn.getAttribute('aria-label'))));
+    if (actionBtns.length === 0) { out._stateForMcp = { found: false }; return out; }
 
-  if (actionBtns.length === 0) return { found: false };
+    const actions = actionBtns.slice(0, 5).map((btn, i) => {
+      btn.setAttribute('data-argus-wf-btn', String(i));
+      const row = btn.closest('tr, [role="row"], mat-row, [role="listitem"], [class*="card"], [class*="record"]');
+      if (row) row.setAttribute('data-argus-wf-record', String(i));
+      return { selector: `[data-argus-wf-btn="${i}"]`, label: norm(btn.innerText || btn.getAttribute('aria-label') || ''), recordSelector: row ? `[data-argus-wf-record="${i}"]` : null };
+    });
 
-  const actions = actionBtns.slice(0, 5).map((btn, i) => {
-    btn.setAttribute('data-argus-wf-btn', String(i));
-    // Find the containing record
-    const row = btn.closest('tr, [role="row"], mat-row, [role="listitem"], [class*="card"], [class*="record"]');
-    if (row) row.setAttribute('data-argus-wf-record', String(i));
-    const label = norm(btn.innerText || btn.getAttribute('aria-label') || '');
-    return {
-      selector: `[data-argus-wf-btn="${i}"]`,
-      label,
-      recordSelector: row ? `[data-argus-wf-record="${i}"]` : null
-    };
-  });
+    // status-indicator check
+    const hasActionButtons = !!document.querySelector('[data-argus-wf-btn]');
+    const hasStatusLabels = !!document.querySelector('mat-chip, [class*="status-badge"], [class*="status-chip"], [class*="status-label"], [class*="badge"][class*="state"], [class*="pill"]');
+    if (hasActionButtons && !hasStatusLabels)
+      add({ issueType: 'workflowNoStatusIndicator', severity: 'medium', selector: 'body', description: 'Page has status action buttons but no visible status label/badge on records.', evidence: {} });
 
-  // Check for bulk checkboxes
-  const checkboxes = document.querySelectorAll('input[type="checkbox"], mat-checkbox, [role="checkbox"]');
-  const hasBulkCheckboxes = checkboxes.length >= 3;
+    // bulk-action check
+    const checkboxes = document.querySelectorAll('input[type="checkbox"], mat-checkbox, [role="checkbox"]');
+    const hasBulkCheckboxes = checkboxes.length >= 3;
+    if (hasBulkCheckboxes) {
+      const hasBulkStatusControls = !!document.querySelector('[aria-label*="bulk" i], [class*="bulk-action"], [class*="batch-action"]')
+        || [...document.querySelectorAll('button')].some(b => /\b(bulk|select all|actions)\b/i.test(b.innerText || ''));
+      if (!hasBulkStatusControls)
+        add({ issueType: 'workflowBulkActionMissing', severity: 'low', selector: 'body', description: 'Page has a selectable list (checkboxes) but no bulk-action controls for status changes.', evidence: {} });
+    }
 
-  return { found: true, actions, hasBulkCheckboxes };
-}
-```
-
-```js
-// probe.readRecordStatus — args: { recordSelector }
-({recordSelector}) => {
-  if (!recordSelector) return { statusText: null };
-  const record = document.querySelector(recordSelector);
-  if (!record) return { statusText: null };
-
-  // Look for status badges, chips, labels
-  const statusEl = record.querySelector(
-    'mat-chip, [class*="badge"], [class*="status"], [class*="chip"], ' +
-    '[class*="label"][class*="state"], span[class*="tag"], .status-pill'
-  );
-  if (statusEl) {
-    return { statusText: (statusEl.innerText || '').trim().toLowerCase() };
+    out._stateForMcp = { found: true, actions, hasBulkCheckboxes };
+    return out;
   }
 
-  // Fallback: look for text matching status-like words
-  const cellTexts = [...record.querySelectorAll('td, [role="cell"], mat-cell')].map(c => (c.innerText || '').trim());
-  const statusWord = cellTexts.find(t => /\b(pending|approved|rejected|active|inactive|archived|submitted|completed|published|draft|open|closed)\b/i.test(t));
-  return { statusText: statusWord ? statusWord.toLowerCase() : null };
-}
-```
-
-```js
-// probe.checkConfirmationDialog
-() => {
-  const dialog = document.querySelector(
-    '[role="dialog"][aria-modal="true"]:not([aria-hidden="true"]), ' +
-    'mat-dialog-container, .swal2-popup:not([aria-hidden="true"])'
-  );
-  if (!dialog) return { dialogFound: false };
-  const r = dialog.getBoundingClientRect();
-  if (r.width === 0) return { dialogFound: false };
-
-  const confirmBtn = [...dialog.querySelectorAll('button')].find(b =>
-    /\b(yes|confirm|ok|proceed|approve|continue)\b/i.test(b.innerText || '')
-  );
-  if (confirmBtn) confirmBtn.setAttribute('data-argus-confirm', '1');
-  return {
-    dialogFound: true,
-    confirmSelector: confirmBtn ? '[data-argus-confirm="1"]' : null
-  };
-}
-```
-
-```js
-// probe.checkActionFeedback — reuse the same pattern as qa-test-crud
-() => {
-  const successSel = 'mat-snack-bar-container, [class*="snackbar"], [class*="toast"], [role="alert"], .alert-success, [class*="success-message"], .swal2-success';
-  const errorSel = '[role="alert"][class*="error"], .alert-danger, mat-error, [class*="error-message"], .swal2-error';
-  const ok = [...document.querySelectorAll(successSel)].some(e => {
-    const r = e.getBoundingClientRect(); return r.width > 0 && getComputedStyle(e).display !== 'none';
-  });
-  const err = [...document.querySelectorAll(errorSel)].some(e => {
-    const r = e.getBoundingClientRect(); return r.width > 0 && getComputedStyle(e).display !== 'none';
-  });
-  return { hasSuccess: ok, hasError: err };
-}
-```
-
-```js
-// probe.checkStatusIndicators
-() => {
-  const hasActionButtons = !!document.querySelector(
-    '[data-argus-wf-btn], button[aria-label*="approve" i], button[aria-label*="reject" i]'
-  );
-  const hasStatusLabels = !!document.querySelector(
-    'mat-chip, [class*="status-badge"], [class*="status-chip"], [class*="status-label"], ' +
-    '[class*="badge"][class*="state"], [class*="pill"]'
-  );
-  return { hasActionButtons, hasStatusLabels };
-}
-```
-
-```js
-// probe.checkReverseBlocked — args: { lastAction }
-({lastAction}) => {
-  // After archiving a record, check if there's an unblocked "Restore" or "Activate" button on it
-  const record = document.querySelector('[data-argus-wf-record]');
-  if (!record) return { reverseButtonEnabled: false };
-  const reverseSel = lastAction === 'archive' ? /\b(restore|unarchive|activate)\b/i : /\b(approve|reopen)\b/i;
-  const reverseBtn = [...record.querySelectorAll('button')].find(b =>
-    reverseSel.test(b.innerText || b.getAttribute('aria-label') || '')
-  );
-  return {
-    reverseButtonEnabled: !!(reverseBtn && !reverseBtn.disabled),
-    selector: reverseBtn ? reverseBtn.id ? `#${reverseBtn.id}` : 'button[aria-label]' : null
-  };
-}
-```
-
-```js
-// probe.checkBulkActions
-() => {
-  const bulkSel = [
-    'button:has-text("Bulk")', 'button:has-text("bulk")',
-    '[aria-label*="bulk" i]', '[class*="bulk-action"]',
-    'button:has-text("Select all")', 'button:has-text("Actions")',
-    '[class*="batch-action"]'
-  ].join(', ');
-  const hasBulkStatusControls = !!document.querySelector(bulkSel);
-  return { hasBulkStatusControls };
-}
-```
-
-```js
-// probe.cleanupWorkflow — remove tracking attributes
-() => {
-  for (const el of document.querySelectorAll('[data-argus-wf-btn], [data-argus-wf-record], [data-argus-confirm]')) {
-    try {
-      el.removeAttribute('data-argus-wf-btn');
-      el.removeAttribute('data-argus-wf-record');
-      el.removeAttribute('data-argus-confirm');
-    } catch (_) {}
+  // ── STATUS mode: read a record's current status — args: { recordSelector } ──
+  if (args.mode === 'status') {
+    if (!args.recordSelector) return [{ skill: 'qa-test-workflow', _statusText: null }];
+    const record = document.querySelector(args.recordSelector);
+    if (!record) return [{ skill: 'qa-test-workflow', _statusText: null }];
+    const statusEl = record.querySelector('mat-chip, [class*="badge"], [class*="status"], [class*="chip"], [class*="label"][class*="state"], span[class*="tag"], .status-pill');
+    if (statusEl) return [{ skill: 'qa-test-workflow', _statusText: (statusEl.innerText || '').trim().toLowerCase() }];
+    const cellTexts = [...record.querySelectorAll('td, [role="cell"], mat-cell')].map(c => (c.innerText || '').trim());
+    const statusWord = cellTexts.find(t => /\b(pending|approved|rejected|active|inactive|archived|submitted|completed|published|draft|open|closed)\b/i.test(t));
+    return [{ skill: 'qa-test-workflow', _statusText: statusWord ? statusWord.toLowerCase() : null }];
   }
-  return { ok: true };
+
+  // ── CONFIRM mode: is a confirmation dialog open? tag its confirm button ──
+  if (args.mode === 'confirm') {
+    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]:not([aria-hidden="true"]), mat-dialog-container, .swal2-popup:not([aria-hidden="true"])');
+    if (!dialog || dialog.getBoundingClientRect().width === 0) return [{ skill: 'qa-test-workflow', _dialogFound: false }];
+    const confirmBtn = [...dialog.querySelectorAll('button')].find(b => /\b(yes|confirm|ok|proceed|approve|continue)\b/i.test(b.innerText || ''));
+    if (confirmBtn) confirmBtn.setAttribute('data-argus-confirm', '1');
+    return [{ skill: 'qa-test-workflow', _dialogFound: true, _confirmSelector: confirmBtn ? '[data-argus-confirm="1"]' : null }];
+  }
+
+  // ── FEEDBACK mode: success/error toast shown? ──
+  if (args.mode === 'feedback') {
+    const successSel = 'mat-snack-bar-container, [class*="snackbar"], [class*="toast"], [role="alert"], .alert-success, [class*="success-message"], .swal2-success';
+    const errorSel = '[role="alert"][class*="error"], .alert-danger, mat-error, [class*="error-message"], .swal2-error';
+    const ok = [...document.querySelectorAll(successSel)].some(visW);
+    const err = [...document.querySelectorAll(errorSel)].some(visW);
+    return [{ skill: 'qa-test-workflow', _hasSuccess: ok, _hasError: err }];
+  }
+
+  // ── REVERSE mode: after archiving, is an unblocked restore/activate button present? — args: { lastAction } ──
+  if (args.mode === 'reverse') {
+    const record = document.querySelector('[data-argus-wf-record]');
+    if (!record) return out;
+    const reverseSel = args.lastAction === 'archive' ? /\b(restore|unarchive|activate)\b/i : /\b(approve|reopen)\b/i;
+    const reverseBtn = [...record.querySelectorAll('button')].find(b => reverseSel.test(b.innerText || b.getAttribute('aria-label') || ''));
+    if (reverseBtn && !reverseBtn.disabled)
+      add({ issueType: 'workflowReverseNotBlocked', severity: 'medium', selector: reverseBtn.id ? `#${reverseBtn.id}` : 'button[aria-label]', description: 'An irreversible status can be re-activated without restriction (no disabled button or error).', evidence: { lastAction: args.lastAction } });
+    return out;
+  }
+
+  // ── CLEANUP mode ──
+  if (args.mode === 'cleanup') {
+    for (const el of document.querySelectorAll('[data-argus-wf-btn], [data-argus-wf-record], [data-argus-confirm]')) {
+      try { el.removeAttribute('data-argus-wf-btn'); el.removeAttribute('data-argus-wf-record'); el.removeAttribute('data-argus-confirm'); } catch (_) {}
+    }
+    return [];
+  }
+
+  return out;
 }
 ```
 
-Always call `probe.cleanupWorkflow` at the end, even on error.
+> The probe attaches non-ticketed `_*` fields (status text, dialog/confirm flags, feedback flags) the orchestrator reads to decide ticketing. Only objects with an `issueType` become tickets.
+
+## MCP steps (transition)
+
+Priority order (non-destructive first): `approve` > `submit` > `activate` > `complete` > `archive` > `reject`. Always test reversible actions before irreversible ones. For each action in `pageState._stateForMcp.actions` (max 3):
+
+1. `before = browser_evaluate(probe, {mode:'status', recordSelector: action.recordSelector})` → `before[0]._statusText`.
+2. `browser_click(action.selector)`, `browser_wait_for(time=600)`.
+3. `c = browser_evaluate(probe, {mode:'confirm'})`. If `c[0]._dialogFound`: `browser_click(c[0]._confirmSelector)`, `browser_wait_for(time=800)`, then `c2 = browser_evaluate(probe, {mode:'confirm'})`; if `c2[0]._dialogFound` → emit **workflowConfirmDialogBroken (high)** and continue.
+4. `browser_wait_for(time=600)`; `fb = browser_evaluate(probe, {mode:'feedback'})`. If `!fb[0]._hasSuccess && !fb[0]._hasError` → emit **workflowNoConfirmFeedback (medium)**.
+5. `after = browser_evaluate(probe, {mode:'status', recordSelector: action.recordSelector})`. If `after[0]._statusText === before[0]._statusText` → emit **workflowTransitionFailed (high)** with `evidence:{action:action.label, statusBefore:before[0]._statusText, statusAfter:after[0]._statusText}`.
+6. (Optional, only if an `archive`/`reject` action succeeded) `browser_evaluate(probe, {mode:'reverse', lastAction:'archive'})` — may emit **workflowReverseNotBlocked (medium)**.
+
+Finally: `browser_evaluate(probe, {mode:'cleanup'})` — always, even on error.
 
 ## Hard rules
 
 1. **Non-destructive first** — test Approve before Archive, Activate before Delete.
-2. **Mandatory cleanup** — remove all `data-argus-wf-*` attributes on exit.
-3. **Max 3 transitions** — bounded; don't churn through every record on the page.
+2. **Mandatory cleanup** — run the probe's `cleanup` mode to remove all `data-argus-wf-*` attributes.
+3. **Max 3 transitions** — bounded; don't churn through every record.
 4. **Sonnet model** — status text interpretation requires semantic judgment.
+
+## Notes on this conversion
+- `executable: partial`. Discovery, status read, confirm-dialog detection, feedback check, reverse-block check, and cleanup are folded into ONE multi-mode `browser_evaluate` probe. The action click (and confirm click) stay as MCP `browser_click` calls because triggering a real, SPA-honored status transition needs a trusted click + async settle that `browser_evaluate` should not fake.

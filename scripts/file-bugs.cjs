@@ -47,6 +47,36 @@ const BUGS_LOG     = path.join(RUN_DIR, 'bugs-filed.jsonl');
 if (!fs.existsSync(RUN_DIR))    { console.error(`Run dir missing: ${RUN_DIR}`); process.exit(1); }
 if (!fs.existsSync(ISSUES_DIR)) { console.error(`Issues dir missing: ${ISSUES_DIR}`); process.exit(1); }
 
+// ── HARD COVERAGE GATE (added 2026-06-11) ────────────────────────────────────
+// Filing is BLOCKED unless coverage-gate.cjs passed AND the issues dir is unchanged since.
+// This is what makes a half-run physically un-fileable, and stops a padded/hand-edited receipt
+// from reaching ADO: the token holds a hash of the issues dir; if anything changed, it mismatches.
+{
+  const GATE = path.join(RUN_DIR, '.gate-pass');
+  if (!fs.existsSync(GATE)) {
+    console.error('\n🚫 BLOCKED: no .gate-pass token. Run `node scripts/coverage-gate.cjs ' + RUN_ID + '` and get exit 0 FIRST.');
+    console.error('   Filing without a passing coverage gate is forbidden — it is how partial runs got reported as complete.\n');
+    process.exit(2);
+  }
+  try {
+    const crypto = require('crypto');
+    const tok = JSON.parse(fs.readFileSync(GATE, 'utf8'));
+    const h = crypto.createHash('sha256');
+    for (const f of fs.readdirSync(ISSUES_DIR).sort()) {
+      if (!/-(probes|interactive|sequence)\.json$/.test(f)) continue;
+      h.update(f); h.update(fs.readFileSync(path.join(ISSUES_DIR, f)));
+    }
+    const now = h.digest('hex');
+    if (now !== tok.receiptsHash) {
+      console.error('\n🚫 BLOCKED: coverage receipts changed since the gate passed (hash mismatch).');
+      console.error('   Expected ' + String(tok.receiptsHash).slice(0, 12) + '… but receipts now hash ' + now.slice(0, 12) + '….');
+      console.error('   Re-run `node scripts/coverage-gate.cjs ' + RUN_ID + '` to re-validate, then file.\n');
+      process.exit(2);
+    }
+    console.log('🔒 Coverage gate token verified (issues hash ' + now.slice(0, 12) + '…) — filing authorized.');
+  } catch (e) { console.error('🚫 BLOCKED: could not verify .gate-pass token: ' + e.message); process.exit(2); }
+}
+
 // ── Config + secrets ───────────────────────────────────────────────────────
 const CONFIG  = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, '.claude/automation.config.json'), 'utf8'));
 const SECRETS = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, '.claude/secrets.json'), 'utf8'));
@@ -167,7 +197,7 @@ async function attachScreenshot(bugId, screenshotPath) {
 
   const upRes = await adoRequest(
     'POST',
-    `/${ORG_NAME}/${PROJECT}/_apis/wit/attachments?fileName=${encodeURIComponent(fileName)}&api-version=7.1`,
+    `/${ORG_NAME}/${encodeURIComponent(PROJECT)}/_apis/wit/attachments?fileName=${encodeURIComponent(fileName)}&api-version=7.1`,
     buf,
     'application/octet-stream'
   );
@@ -177,7 +207,7 @@ async function attachScreenshot(bugId, screenshotPath) {
 
   const linkRes = await adoRequest(
     'PATCH',
-    `/${ORG_NAME}/${PROJECT}/_apis/wit/workitems/${bugId}?api-version=7.1`,
+    `/${ORG_NAME}/${encodeURIComponent(PROJECT)}/_apis/wit/workitems/${bugId}?api-version=7.1`,
     [{ op: 'add', path: '/relations/-',
        value: { rel: 'AttachedFile', url: attUrl, attributes: { comment: 'Argus QA evidence' } } }],
     'application/json-patch+json'
@@ -207,7 +237,7 @@ async function fileBug(issue) {
 
   const createRes = await adoRequest(
     'POST',
-    `/${ORG_NAME}/${PROJECT}/_apis/wit/workitems/$Bug?api-version=7.1`,
+    `/${ORG_NAME}/${encodeURIComponent(PROJECT)}/_apis/wit/workitems/$Bug?api-version=7.1`,
     patch,
     'application/json-patch+json'
   );

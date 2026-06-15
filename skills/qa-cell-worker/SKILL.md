@@ -23,7 +23,7 @@ Each spawned worker owns ONE (engine × viewport) and receives:
 - `engine` — `chromium` | `firefox` | `webkit`.
 - `viewportClass` + `viewport` — the viewport this worker tests (`{width, height}`). The worker resizes its browser to this ONCE and keeps it for all cells.
 - `chunkIndex` — which worker this is (0..activeWorkers-1)
-- `cells[]` — every route at this (engine, viewport): `audit-plan.cells.filter(c => c.browser === engine && c.viewportClass === viewportClass)`. It never touches another (engine, viewport).
+- `cells[]` — the routes assigned to THIS dispatch at this (engine, viewport). For small sites this is every route at the viewport; for larger sites the orchestrator splits the viewport's routes into **waves** of ≤ `cells_per_worker` cells and dispatches each wave as a separate FRESH Agent call (this is what stops a worker from running out of context and silently dropping the interactive skills). You process exactly the `cells[]` you were given — no more, no less — and you drive EVERY skill (passive AND every interactive) on EVERY one of them. You never touch another (engine, viewport).
 - `runId` — for writing findings to `.tmp/{runId}/issues/cell-XXX.jsonl`
 - `resolvedConfig` — full audit config (browsers, viewports, enabled skills, content settings, resilience knobs)
 - `baseUrl` — app under test
@@ -39,23 +39,49 @@ Each spawned worker owns ONE (engine × viewport) and receives:
 | 5 | **MUST honor `resilience.cell_total_ms`** — if a cell exceeds the budget, append `cellTimeout` finding and continue to next cell in chunk. | Same protection the serial loop has. |
 | 6 | **MUST NOT cross-contaminate cells from other workers.** Only touch cells in YOUR `cells[]` array. | Parent orchestrator already partitioned cells; workers must respect partitioning. |
 
+## 🪙 TOKEN & TIME DISCIPLINE (mandatory — this is how the audit stays cheap and fast)
+
+These rules cut token consumption and wall-clock without losing coverage. Violating them is the #1 cause of the 500k-token / 30-minute-per-page runs.
+
+| # | Rule | Why it matters |
+|---|---|---|
+| T1 | **NEVER call `browser_snapshot` (or any full accessibility-tree / full-DOM dump) for DETECTION.** Detection happens ONLY inside the batched `browser_evaluate` probe, which returns compact findings. `browser_snapshot` is the single biggest token cost — one snapshot can be 20–50k tokens. Use it ONLY if you genuinely need a ref to click a specific element you cannot reach by selector, and even then prefer `browser_evaluate` with a selector. | One avoided snapshot ≈ 20–50k tokens saved per use. |
+| T2 | **Run ALL passive probes in ONE `browser_evaluate`** (the batched call in Step 3). NEVER one `browser_evaluate` per skill. One call returns one compact object keyed by skill. | 50 separate calls → 1 call: ~50× fewer round-trips. |
+| T3 | **Probes return ONLY `{skill, issueType, severity, selector, bbox, description}` — never element HTML, never `outerHTML`, never the page text.** Compact data only. | Keeps each finding ~1 line instead of a paragraph. |
+| T4 | **Do NOT re-open individual skill `SKILL.md` files at runtime.** Everything you need is already in `skill-probes.json` (passive probes + interactive specs + frontmatter). Read it ONCE at Step 2. Re-reading 25 SKILL.md files per cell is pure wasted context. | Saves the per-cell re-read tax. |
+| T5 | **Use EVENT waits, not fixed sleeps.** Prefer `browser_wait_for({ text })` / wait-for-selector / a single bounded settle. Never stack multiple multi-second `wait_for({ time })` calls "to be safe". Cap any blind wait at the resilience value and do it ONCE. | Fixed sleeps add 10–20s of dead time per cell for nothing. |
+| T6 | **Do not narrate per action.** Don't write a reasoning paragraph before each click/probe. Decide the cell's plan once, execute, report the result. | Per-action narration is a large hidden token cost across 60+ actions. |
+
 ## Execution flow
 
 ### Step 1 — Size your browser to your viewport
 
+Two cases — check `viewport` from your dispatch prompt:
+
+**Case A — viewport has explicit `width` + `height`** (custom sizes like "Laptop 1280", "Desktop 1440"):
 ```
-mcp__{serverName}__browser_resize(viewport.width, viewport.height)   // e.g. 390×844 for mobile
+mcp__{serverName}__browser_resize(viewport.width, viewport.height)   // e.g. 1280×800
 ```
+
+**Case B — viewport has `name` only, NO `width`/`height`** (named Playwright devices like "iPhone 12", "iPad Air"):
+```
+// SKIP browser_resize — the MCP server was started with --device "<name>" by qa-preflight,
+// so Playwright already set the correct viewport size, mobile UA, touch support, and pixel ratio.
+// Calling browser_resize here would OVERRIDE the device emulation and break the mobile UA.
+LOG: "[worker] device emulation active: {viewport.name} — skipping browser_resize"
+```
+
 Do NOT log in yet. Phase 1 cells must be captured in an unauthenticated state first.
 
-### Step 2 — Load skill-probes.json FIRST, then process cells in phase order
+### Step 2 — Load the SLIM skill list FIRST (NOT the 271KB bundle), then process cells in phase order
 
-**🚨 BEFORE the per-cell loop — read the probe bundle (MANDATORY, do this ONCE):**
+**🚨 BEFORE the per-cell loop — read the SLIM skill list (MANDATORY, do this ONCE):**
 
 ```
-probeBundle = JSON.parse(fs.readFileSync("{project-root}/.tmp/{runId}/skill-probes.json"))
-allSkills   = probeBundle.skills
+allSkills = JSON.parse(fs.readFileSync("{project-root}/.tmp/{runId}/skill-names.json")).skills
 ```
+
+🚨 **BUG 1 FIX — read `skill-names.json` (≈14KB: names + `applyOn`/`interactive`/`executable`/`probeCallable` flags), NEVER `skill-probes.json` (271KB of probe SOURCE).** You only need the names + flags to filter by viewport and to build the coverage receipts. The probe SOURCE is loaded into the PAGE via `probes-inject.js` (Step 4b) — it must never enter your context. Reading the 271KB bundle was the ~68k-tokens-per-worker bug.
 
 **Phase ordering is MANDATORY — process cells in this exact order:**
 
@@ -99,8 +125,8 @@ mcp__{serverName}__browser_navigate({ url: baseUrl + loginPath, waitUntil: "domc
 mcp__{serverName}__browser_type(email into the email/username field)
 mcp__{serverName}__browser_type(password into the password field)   // mask password in all output
 mcp__{serverName}__browser_click(submit)
-mcp__{serverName}__browser_wait_for({ time: 5000 })
-mcp__{serverName}__browser_evaluate("return location.pathname")      // confirm not still on loginPath
+// T5: EVENT wait, not a blind 5s sleep. Poll the path; stop the instant we leave the login route (bounded).
+mcp__{serverName}__browser_evaluate("() => new Promise(r => { const t0 = Date.now(); const i = setInterval(() => { if (!/sign|login|auth/i.test(location.pathname) || Date.now()-t0 > 6000) { clearInterval(i); r(location.pathname); } }, 200); })")
 LOG: "[worker {chunkIndex}] logged in"
 ```
 If login fails: return early with `{ loginFailed: true }`.
@@ -131,16 +157,15 @@ if (actualPath !== cell.route) {
 
 ### Step 3 — Per-cell execution
 
-**🚨 BEFORE the per-cell loop — read the probe bundle (MANDATORY, do this ONCE):**
+**🚨 BEFORE the per-cell loop — read the SLIM skill list (MANDATORY, do this ONCE):**
 
 ```
-probeBundle = JSON.parse(fs.readFileSync("{project-root}/.tmp/{runId}/skill-probes.json"))
-allSkills   = probeBundle.skills   // ALL enabled skills, pre-extracted from their SKILL.md files
+allSkills = JSON.parse(fs.readFileSync("{project-root}/.tmp/{runId}/skill-names.json")).skills   // names + flags only, ≈14KB
 ```
 
-🚨 **FAIL CLOSED — if `skill-probes.json` does not exist or `allSkills.length` is 0, ABORT this worker immediately** (return `{ loginFailed: false, aborted: true, reason: "skill-probes.json missing" }`). Do **NOT** fall back to model memory and audit "the skills you know" — that is precisely the bug that produced 9-skill runs labelled as 92-skill coverage. The orchestrator will re-run `bundle-probes.cjs` and re-dispatch. There is no acceptable degraded path here: no bundle = no audit.
+🚨 **FAIL CLOSED — if `skill-names.json` does not exist or `allSkills.length` is 0, ABORT this worker immediately** (return `{ loginFailed: false, aborted: true, reason: "skill-names.json missing" }`). Do **NOT** fall back to model memory and audit "the skills you know" — that produced 9-skill runs labelled as 92-skill coverage. The orchestrator will re-run `bundle-probes.cjs` and re-dispatch. No bundle = no audit.
 
-This file was written by `bundle-probes.cjs` before workers were dispatched. It contains EVERY enabled skill's probe expression and frontmatter. **Do NOT use model memory to decide which skills to run — use this file exclusively.** This is the fix for the bug where workers ran only ~12 skills from training memory instead of all the enabled skills.
+`skill-names.json` (slim) + `probes-inject.js` (the probe SOURCE, loaded into the page in Step 4b) + `skill-probes.json` (used only by the deterministic runners) are all written by `bundle-probes.cjs` before dispatch. **Use `skill-names.json` to decide which skills to run — never model memory, and never read the 271KB `skill-probes.json` into your context.**
 
 For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{serverName}__`):
 
@@ -155,46 +180,146 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
 
 2. Navigate, then verify URL before running any probes:
    - `mcp__{serverName}__browser_navigate({ url: baseUrl + cell.route, waitUntil: "domcontentloaded", timeout: 15000 })`
-   - `mcp__{serverName}__browser_wait_for({ time: 1500 })`
+   - T5: do NOT add a blind `wait_for({ time: 1500 })` here — the data-ready poll below (step 2b) is the ONE bounded wait that settles the page. A fixed pre-wait on top of it is dead time.
    - `actualPath = mcp__{serverName}__browser_evaluate("return location.pathname")`
    - **If `actualPath !== cell.route`: write `cellRedirected` info finding, SKIP all probes, continue to next cell.**
      This prevents findings from being tagged to the wrong route when an SPA redirects (e.g. authenticated session redirects `/authentication/signin` → `/admin/dashboard/main`).
 
-   🚨 **SCROLL TO TOP before probes (MANDATORY):**
-   - `mcp__{serverName}__browser_evaluate("window.scrollTo(0,0)")`
+   🚨 **LAZY-LOAD SCROLL then SCROLL TO TOP — TWO mandatory steps, in order:**
 
-   `getBoundingClientRect()` is viewport-relative. If the app auto-scrolled during load (Angular scroll restoration, auto-focus, lazy-load layout shift), every bbox.y would be offset by scrollY — placing every annotation box at the wrong element in the fullPage screenshot (which always captures from document y=0). Forcing scroll=0 here makes viewport-relative coordinates equal to document-absolute coordinates, so annotations are drawn on the correct element.
-
-3. **Run ALL passive probes in ONE batched browser_evaluate** — every skill in `passiveSkills`, no skipping:
-   ```js
-   probeResult = mcp__{serverName}__browser_evaluate({
-     function: `(skills) => {
-       const out = {};
-       for (const s of skills) {
-         try { out[s.name] = (new Function('return ' + s.probe))()(); }
-         catch(e) { out[s.name] = { error: e.message }; }
-       }
-       return out;
-     }`,
-     arg: passiveSkills.map(s => ({ name: s.name, probe: s.probe }))   // ← the WHOLE array, every passive skill
+   **Step A — slow scroll through the entire page (MANDATORY — triggers lazy/virtual DOM rendering):**
+   ```
+   mcp__{serverName}__browser_evaluate({
+     function: `() => new Promise(r => {
+       let h = 0;
+       const t = setInterval(() => {
+         window.scrollBy(0, 300);
+         h += 300;
+         if (h >= document.body.scrollHeight) {
+           clearInterval(t);
+           window.scrollTo(0, 0);
+           setTimeout(r, 500);
+         }
+       }, 150);
+     })`
    })
    ```
-   Log: `[worker {chunkIndex}] cell {cell.id} — running {passiveSkills.length} passive probes`
+   **Why:** Angular, React, and virtual-scroll frameworks (Angular CDK, AG Grid, ngx-datatable) only render DOM nodes when they enter the viewport. If you skip this scroll, any element below the fold simply does not exist in the DOM — the probe cannot find it, cannot measure it, and will NOT report it. This is the root cause of "only top-of-page issues detected".
 
-   🚨 **`arg` MUST be `passiveSkills.map(...)` over the ENTIRE filtered array — never a hand-picked subset.** `passiveSkills` came from `skill-probes.json` (Step 2). You do NOT choose which skills are "relevant"; you pass ALL of them and let each probe self-skip (return `[]`) when its target isn't on the page. Passing fewer than `passiveSkills.length` entries is the exact bug that collapsed a 57-skill audit down to 9 — it is forbidden and the coverage gate (below) will catch it and force a re-run.
+   **Step B — scroll back to top (MANDATORY for bbox accuracy):**
+   - `mcp__{serverName}__browser_evaluate("window.scrollTo(0,0)")`
+   - `mcp__{serverName}__browser_wait_for({ time: 300 })`
 
-3b. **Dump the probe RECEIPT immediately (MANDATORY — this is the coverage evidence).** Write the FULL `probeResult` object — every skill key, including ones that returned `[]` or `{error}` — to `{project-root}/.tmp/{runId}/issues/{cell.id}-probes.json` (use the Write tool, NOT an `issues/*.jsonl` file):
+   **Why:** `getBoundingClientRect()` is viewport-relative. If the page is scrolled when probes run, every `bbox.y` is offset by `scrollY` — annotations land on the wrong element in the fullPage screenshot (which always starts from document y=0). Scroll=0 makes viewport coords equal document-absolute coords.
+
+   🚨 **Step C — WAIT-FOR-DATA-READY (MANDATORY for SPA pages, prevents the "no records found" false positive on pages that load fine manually):**
+
+   The fixed 1500ms `post_navigate_settle_ms` is too short for data-heavy SPA dashboards (Angular/React/Vue) — REST API calls + Angular zone.js + change detection commonly take 2–4 seconds. If you skip this step, probes see the page DURING its loading state, the table is empty, and your tools emit dozens of false "no data" / "empty state" findings on pages that actually have data.
+
+   Poll up to `data_ready_max_ms` (default 8000ms) until ANY of these is true:
+
+   ```
+   mcp__{serverName}__browser_evaluate({
+     function: `() => {
+       // (a) Loading indicators are GONE — page finished its fetches
+       const stillLoading = document.querySelector(
+         '[aria-busy="true"], .loading:not(.loading-text), .spinner:not(.spinner-icon), ' +
+         '.skeleton, .skeleton-loader, mat-progress-bar, mat-progress-spinner, ' +
+         '[class*="loading-spinner"], [class*="skeleton"]'
+       );
+       if (stillLoading) {
+         const cs = getComputedStyle(stillLoading);
+         if (cs.display !== 'none' && cs.visibility !== 'hidden' && stillLoading.getBoundingClientRect().width > 0) {
+           return { ready: false, reason: 'still loading' };
+         }
+       }
+       // (b) Data IS present — at least one tbody row or list item with real text
+       const rowSel = 'tbody tr, [role="row"]:not([role="rowheader"]), li[class*="row"], li[class*="item"], [class*="list-item"]';
+       const realRows = [...document.querySelectorAll(rowSel)].filter(r => {
+         const t = (r.innerText || '').trim();
+         return t.length > 0 && r.getBoundingClientRect().height > 8;
+       });
+       if (realRows.length > 0) return { ready: true, reason: 'rows present' };
+       // (c) Explicit empty-state message rendered ("No records found", "No data", etc.) —
+       //     the page reached its final state, just happens to be empty
+       const emptyMsg = [...document.querySelectorAll('p, span, div, h2, h3, h4')]
+         .find(el => /no\s+(records?|data|results?|items?|entries|matches?)\s+(found|available)?|empty\s+list|nothing\s+found|0\s+results?/i.test((el.innerText || '').trim()));
+       if (emptyMsg) return { ready: true, reason: 'empty-state shown' };
+       // (d) Error state visible — page failed but reached terminal state
+       const errMsg = [...document.querySelectorAll('p, span, div, [role="alert"]')]
+         .find(el => /(error|failed|something\s+went\s+wrong|unable\s+to\s+load)/i.test((el.innerText || '').trim().slice(0, 60)));
+       if (errMsg) return { ready: true, reason: 'error state' };
+       return { ready: false, reason: 'no data yet, no empty/error state' };
+     }`
+   })
+   ```
+
+   Polling protocol:
+   - Initial wait: 400ms (let the framework dispatch the fetch).
+   - Then evaluate every 400ms, max `data_ready_max_ms / 400` attempts.
+   - Stop on `ready: true`.
+   - If still not ready at the cap, proceed anyway (some pages legitimately have no data and no empty-state message — better to scan a partial page than infinite-wait).
+   - Log: `[worker] cell {cell.id} data-ready: {reason} after {elapsed}ms`.
+
+4. **Take base screenshot BEFORE probes** (MUST use fullPage: true — NEVER omit this flag):
+   ```
+   mcp__{serverName}__browser_take_screenshot({
+     filename: "{ABSOLUTE-project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png",
+     fullPage: true
+   })
+   ```
+   🚨 `fullPage: true` is NON-NEGOTIABLE. Without it the screenshot captures only the visible viewport (~900px tall). The annotated PNG will be missing everything below the fold and devs will see a partial page with boxes pointing at nothing. Always `fullPage: true`.
+
+4b. **🪙 LOAD THE PROBE BUNDLE INTO THE PAGE (BUG 1/2 fix — do this ONCE per cell, BEFORE probing):**
+   The 271KB of probe source lives in `{project-root}/.tmp/{runId}/probes-inject.js` (written by `bundle-probes.cjs`). Load it INTO THE PAGE so the probe code is held by the BROWSER, never read into your context:
+   ```
+   mcp__{serverName}__browser_run_code_unsafe({ code: `await page.addScriptTag({ path: "{ABSOLUTE-project-root}/.tmp/{runId}/probes-inject.js" })` })
+   ```
+   This defines `window.__ARGUS_PROBES` in the page (the full probe library + `runPassive`/`runInteractive` batch helpers). 🚨 You do NOT read `skill-probes.json` into your context — only the slim `skill-names.json` (a few KB, names + flags) for filtering/receipts. Reading the 271KB bundle into context was the ~68k-tokens-per-worker bug.
+
+4c. **PAGE SCOUT — run ONCE per cell, AFTER bundle load (mandatory fingerprint step):**
+
+   The bundle is now loaded (step 4b), so `window.__ARGUS_PROBES.runScout()` is available. Call it now:
+   ```
+   fingerprint = mcp__{serverName}__browser_evaluate({
+     function: `() => window.__ARGUS_PROBES.runScout()`
+   })
+   ```
+   🚨 Do NOT read `skills/qa-page-scout/SKILL.md` at runtime — that violates T4. The scout is compiled into the bundle by `bundle-probes.cjs`.
+   Log: `[worker {chunkIndex}] scout {cell.id}: hasForms=${fingerprint.hasForms} hasTables=${fingerprint.hasTables} hasImages=${fingerprint.hasImages} hasNavigation=${fingerprint.hasNavigation} ...`
+
+   The fingerprint is passed to `runPassive()` and `runInteractive()` as `ctx.fingerprint`. Skills whose `requires: [flagA, flagB]` frontmatter has NO matching true flag in the fingerprint are auto-skipped by the inject bundle (marked `{skipped:'scout'}` in the receipt — NOT an error, NOT a finding). Skills with `requires: []` always run.
+
+   **Why this matters:** A login page has no tables, no drag-drop, no charts, no RTL. Without the scout, `runPassive` still calls all 63 passive probes on it. With the scout, ~40 of them are skipped in-page before any DOM query runs. ~77% token reduction per cell on simple pages.
+
+5. **Run ALL passive probes in ONE TINY call — you send a one-liner, NOT probe source (BUG 1/2/3):**
+   ```
+   probeResult = mcp__{serverName}__browser_evaluate({
+     function: `() => window.__ARGUS_PROBES.runPassive("{cell.viewportClass}", { route: "{cell.route}", properNouns: {properNounsJson}, fingerprint: {fingerprintJson} })`
+   })
+   // {fingerprintJson} = JSON.stringify(fingerprint) from step 3b above
+   ```
+   The page already has every probe (from step 4b), so this single call runs ALL applicable passive probes in-page and returns the compact `{ skillName: findings[] }` object. **No probe code rides in this call.** That is the whole fix: ~68k tokens of probe source → a 1-line call.
+   Log: `[worker {chunkIndex}] cell {cell.id} — runPassive returned {Object.keys(probeResult).length} skill results`
+
+5b. **Dump the probe RECEIPT immediately (MANDATORY — this is the coverage evidence).** Write the FULL `probeResult` object — every skill key, including ones that returned `[]` or `{error}` — to `{project-root}/.tmp/{runId}/issues/{cell.id}-probes.json` (use the Write tool, NOT an `issues/*.jsonl` file):
    ```
    Write("{project-root}/.tmp/{runId}/issues/{cell.id}-probes.json", JSON.stringify(probeResult))
    ```
-   This file is the ONLY proof that each passive skill actually executed on this cell. `scripts/coverage-gate.cjs` reads it: a skill whose key is present = ran (covered); a skill whose key is absent = never ran (silent skip → re-dispatched). If you skip this dump, the gate treats the entire cell as uncovered and re-runs it. You CANNOT fake coverage by editing the ledger — only a real receipt with the skill's key counts.
+   This file is the ONLY proof that each passive skill actually executed on this cell. `scripts/coverage-gate.cjs` reads it: a skill whose key is present = ran (covered); a skill whose key is absent = never ran (silent skip → re-dispatched). Skills skipped by the page scout have value `{skipped:'scout'}` — these ARE covered (intentional skip based on page fingerprint, not a missing run). If you skip this dump, the gate treats the entire cell as uncovered and re-runs it. You CANNOT fake coverage by editing the ledger — only a real receipt with the skill's key counts.
 
-4. **Take base screenshot** (MUST be full absolute path):
-   `mcp__{serverName}__browser_take_screenshot({ filename: "{ABSOLUTE-project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png", fullPage: true })`
+7. **Run ALL interactive probes in ONE TINY call (BUG 1/2/3) — again, you send a one-liner, not probe source:**
+   ```
+   interResult = mcp__{serverName}__browser_evaluate({
+     function: `async () => await window.__ARGUS_PROBES.runInteractive("{cell.viewportClass}", {fingerprintJson})`
+   })
+   // {fingerprintJson} = JSON.stringify(fingerprint) from step 3b — same fingerprint passed to both
+   ```
+   The page already has every interactive probe (from step 4b). This single awaited call runs ALL applicable `executable` interactive probes in-page (search/sort/crud/forms/tabs/modal/…), each self-restoring page state, and returns `{ skillName: findings[] }`. **No probe code, no 38 separate calls.** That is the BUG 3 fix.
+   - **`executable: partial`** skills: after `runInteractive`, perform ONLY the few extra MCP steps in that skill's "## MCP steps (...)" section (a real `browser_resize`/`browser_navigate`/`browser_file_upload`/`browser_drag` the page-probe can't do).
+   - **Non-callable / legacy** skills (those with `probeCallable:false` in `skill-names.json`, e.g. `qa-review-content`, `qa-test-cases`): drive their MCP/judgment sequence the legacy way — they are NOT in the injected bundle.
 
-5. **Drive interactive skills** — for each skill in `interactiveSkills`, read its SKILL.md and execute its MCP-tool sequence. Drive EVERY skill in `interactiveSkills` — never a model-chosen subset. A skill whose target control isn't on the page records `skipReason` (e.g. "no form"), but it is still attempted and still recorded.
-
-5b. **Dump the interactive RECEIPT (MANDATORY — coverage evidence for the 35 interactive skills).** Write `{project-root}/.tmp/{runId}/issues/{cell.id}-interactive.json` (Write tool) with ONE key per interactive skill in `applicableSkills` — including ones that self-skipped:
+7b. **Dump the interactive RECEIPT (MANDATORY — coverage evidence for the 35 interactive skills).** Write `{project-root}/.tmp/{runId}/issues/{cell.id}-interactive.json` (Write tool) with ONE key per interactive skill in `applicableSkills` — including ones that self-skipped:
    ```
    { "qa-form-validation": {"ran":true,"interacted":true,"findings":3},
      "qa-test-data-controls": {"ran":true,"interacted":false,"findings":0,"skipReason":"no table/filter/search on page"},
@@ -202,7 +327,7 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
    ```
    `scripts/coverage-gate.cjs` reads this: an interactive skill whose key is present = ran (covered); absent = never driven → re-dispatched. Every interactive skill applicable to this cell MUST have a key here, just as every passive skill must have a key in `{cell.id}-probes.json`. Together the two receipts prove all 92 skills were executed on this cell.
 
-6. Write findings to `{project-root}/.tmp/{runId}/issues/{cell.id}.jsonl` (one JSON object per line).
+8. Write findings to `{project-root}/.tmp/{runId}/issues/{cell.id}.jsonl` (one JSON object per line).
 
    **🚨 VERBATIM OUTPUT — NEVER FABRICATE (mandatory, no exceptions):**
    Each finding you write MUST be the EXACT object the probe returned. You are a transcriber, not an author. For every probe result object, copy these fields BYTE-FOR-BYTE from the probe's return value:
@@ -223,12 +348,12 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
 
 8. Cross-skill dedup (in-worker, no MCP call).
 
-3. Stream progress:
+9. Stream progress:
    ```
    [worker {chunkIndex}] cell {n}/{cells.length} {route} @ {viewport}/{browser} → {findingsCount} findings
    ```
 
-4. Honor timeout: wrap the whole cell in a budget timer. If `cell_total_ms` exceeded:
+10. Honor timeout: wrap the whole cell in a budget timer. If `cell_total_ms` exceeded:
    - Append `{ issueType: "cellTimeout", severity: "low", description: "Cell exceeded {N}ms budget" }` to JSONL
    - Skip to next cell
 

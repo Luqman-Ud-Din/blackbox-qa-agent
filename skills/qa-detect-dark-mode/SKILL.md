@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasThemeToggle, hasDarkModeActive, hasPrefersColorScheme]
 ---
 
 ## What it checks

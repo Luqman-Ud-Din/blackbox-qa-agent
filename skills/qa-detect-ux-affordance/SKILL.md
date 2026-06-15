@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasActionButtons, hasDragDrop, hasToggleSwitches]
 ---
 
 ## What it catches — 6 issue types

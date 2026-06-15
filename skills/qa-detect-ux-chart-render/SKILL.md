@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasCharts, hasProgressBars, hasGauges]
 ---
 
 ## What it catches — 4 issue types

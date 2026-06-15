@@ -197,28 +197,94 @@ viewportSensitive: true
     }
   }
 
-  // 11. elementOverlap — interactive elements visually covered by unrelated elements
+  // 11. elementOverlap — REAL collision between two sibling content elements only.
+  //
+  // A bounding-box / center-point intersection is NOT a bug by itself: the vast
+  // majority of overlaps are INTENTIONAL and correct — dropdowns/tooltips/popovers/
+  // dialogs rendered over content, absolutely- or fixed-positioned badges on avatars,
+  // z-stacked modals, sticky headers sitting over scrolled content, an icon inside a
+  // button, a label inside its field. We only flag a genuine collision: two SIBLING
+  // content elements (one is NOT an ancestor/descendant of the other, NEITHER is an
+  // overlay) that actually clip each other's TEXT.
+  //
+  // Helpers:
+  const OVERLAY_ROLES = ['tooltip','status','alert','progressbar','menu','listbox','dialog','alertdialog','menuitem','option','presentation'];
+  const OVERLAY_CLASS_RE = /(dropdown|popover|popper|tooltip|menu|overlay|badge|chip|pill|backdrop|modal|dialog|toast|snackbar|notification|cdk-overlay|MuiPopover|MuiMenu|MuiPopper|ant-dropdown|ant-popover|ant-tooltip|ant-select-dropdown)/i;
+  const isOverlayLike = node => {
+    if (!node || node.nodeType !== 1) return false;
+    const role = node.getAttribute && node.getAttribute('role');
+    if (role && OVERLAY_ROLES.includes(role)) return true;
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    if (OVERLAY_CLASS_RE.test(cls)) return true;
+    const st = getComputedStyle(node);
+    // Positioned out-of-flow layers stack ON TOP intentionally — not a content collision.
+    if (st.position === 'absolute' || st.position === 'fixed' || st.position === 'sticky') return true;
+    return false;
+  };
+  // An element is overlay-like if it OR any ancestor (up to body) is overlay-like —
+  // covers the inner text node of a dropdown/badge/popover whose wrapper carries the role/class/position.
+  const inOverlayChain = node => {
+    let n = node;
+    while (n && n !== document.body && n !== document.documentElement) {
+      if (isOverlayLike(n)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  };
+  const hasOwnText = node => {
+    if (!node || node.nodeType !== 1) return false;
+    for (const c of node.childNodes) { if (c.nodeType === 3 && c.textContent.trim().length >= 2) return true; }
+    return false;
+  };
+  const isTransparent = node => {
+    const st = getComputedStyle(node);
+    if (parseFloat(st.opacity) === 0) return true;
+    const bg = st.backgroundColor || '';
+    const m = bg.match(/rgba?\(([^)]+)\)/);
+    const transparentBg = !bg || bg === 'transparent' || (m && m[1].split(',').map(s => s.trim())[3] === '0');
+    // transparent only counts if it ALSO has no background image and no border — i.e. visually empty
+    const noImg = st.backgroundImage === 'none';
+    return transparentBg && noImg;
+  };
+
   const interactiveEls = document.querySelectorAll('button:not([disabled]), a[href], input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [role="button"]:not([disabled])');
   for (const el of interactiveEls) {
     if (out.length >= 20) break;
     const r = el.getBoundingClientRect();
     if (r.width < 5 || r.height < 5) continue;
     if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
+    // off-canvas / hidden interactive element — never a visible collision
+    const elStyle = getComputedStyle(el);
+    if (elStyle.display === 'none' || elStyle.visibility === 'hidden' || parseFloat(elStyle.opacity) === 0) continue;
+    // EXEMPT: the element itself sits in an overlay chain (it's part of a dropdown/menu/dialog/badge) —
+    // overlapping the content beneath is the whole point of an overlay.
+    if (inOverlayChain(el)) continue;
     const cx = Math.round(r.left + r.width / 2);
     const cy = Math.round(r.top + r.height / 2);
     if (cx < 0 || cx > vw || cy < 0 || cy > vh) continue;
     const topEl = document.elementFromPoint(cx, cy);
-    if (!topEl || topEl === el || el.contains(topEl) || topEl.contains(el)) continue;
+    if (!topEl || topEl === el) continue;
+    // EXEMPT: parent/child containment (icon-in-button, label-in-field, text node of the control itself)
+    if (el.contains(topEl) || topEl.contains(el)) continue;
     const topR = topEl.getBoundingClientRect();
     if (topR.width < 20 && topR.height < 20) continue; // tiny badge/dot — decorative
     if (getComputedStyle(topEl).pointerEvents === 'none') continue; // passthrough overlay
-    const topRole = topEl.getAttribute('role');
-    if (['tooltip','status','alert','progressbar'].includes(topRole)) continue;
+    // EXEMPT: the covering element is an intentional overlay (dropdown/tooltip/popover/dialog/badge,
+    // or anything absolutely/fixed/sticky-positioned stacked above) — NOT a sibling-content collision.
+    if (inOverlayChain(topEl)) continue;
+    // EXEMPT: one of the two is visually transparent (it isn't actually clipping anything visible).
+    if (isTransparent(topEl) || isTransparent(el)) continue;
+    // REQUIRE A REAL COLLISION: both the interactive element and the covering element must
+    // render their OWN text, and that text must measurably overlap — i.e. they clip each other.
+    if (!hasOwnText(el) || !hasOwnText(topEl)) continue;
+    const ox = Math.min(r.right, topR.right) - Math.max(r.left, topR.left);
+    const oy = Math.min(r.bottom, topR.bottom) - Math.max(r.top, topR.top);
+    if (ox <= 4 || oy <= 4) continue; // negligible touch — not a clipping collision
     // Skip if already caught by criticalElementHidden (submit/CTA buttons)
     const isCritical = el.matches('button[type="submit"], input[type="submit"], a.cta, .btn-primary, .primary-button, [data-testid*="submit"]');
     if (isCritical) continue;
     out.push({ issueType:'elementOverlap', severity:'high', selector:sel(el),
-      description:`Interactive element covered by ${sel(topEl)} at center point — may not be clickable/tappable`, bbox: bb(el) });
+      description:`Two sibling content elements collide: ${sel(el)} and ${sel(topEl)} overlap by ${Math.round(ox)}×${Math.round(oy)}px and clip each other's text (neither is an overlay/dropdown/badge).`, bbox: bb(el) });
   }
 
   // 12. gridCollapseIssue + flexNoWrapOverflow — grid/flex that doesn't collapse at mobile/tablet
@@ -310,6 +376,51 @@ viewportSensitive: true
     }
   }
 
+  // 14. cardIconOverlapsText — icon inside a stat/summary card overlaps the card title text.
+  // Triggered on mobile/tablet where cards are narrow and an absolutely-positioned icon
+  // (top-right corner) bleeds into the label text — e.g. "TOTAL STUDENTS" with user-circle icon.
+  if (vw <= 900) {
+    const CARD_SEL = '[class*="stat-card"],[class*="stat_card"],[class*="kpi-card"],[class*="summary-card"],[class*="metric-card"],[class*="widget-card"],[class*="info-card"],[class*="count-card"],[class*="dashboard-stat"],[class*="overview-card"],[class*="overview-item"]';
+    let cardIconFlagged = 0;
+    for (const card of document.querySelectorAll(CARD_SEL)) {
+      if (cardIconFlagged >= 4 || out.length >= 20) break;
+      const cr = card.getBoundingClientRect();
+      if (cr.width === 0 || cr.height === 0) continue;
+      const textEls = [...card.querySelectorAll('span,p,h1,h2,h3,h4,h5,h6,label,[class*="title"],[class*="label"],[class*="heading"],[class*="card-title"]')]
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return false;
+          const t = (el.innerText || '').trim();
+          return t.length >= 2 && t.length <= 50;
+        });
+      const iconEls = [...card.querySelectorAll('img,svg,i[class*="pi"],i[class*="fa"],i[class*="icon"],[class*="card-icon"],[class*="stat-icon"],[class*="widget-icon"]')]
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.width <= 80 && r.height <= 80;
+        });
+      for (const icon of iconEls) {
+        if (cardIconFlagged >= 4 || out.length >= 20) break;
+        const ir = icon.getBoundingClientRect();
+        if (ir.right < cr.left || ir.left > cr.right) continue;
+        for (const textEl of textEls) {
+          if (textEl.contains(icon) || icon.contains(textEl)) continue;
+          const tr = textEl.getBoundingClientRect();
+          if (tr.width === 0) continue;
+          const overlapX = Math.min(ir.right, tr.right) - Math.max(ir.left, tr.left);
+          const overlapY = Math.min(ir.bottom, tr.bottom) - Math.max(ir.top, tr.top);
+          if (overlapX > 8 && overlapY > 4) {
+            cardIconFlagged++;
+            const label = (textEl.innerText || '').trim().slice(0, 35);
+            out.push({ issueType:'cardIconOverlapsText', severity:'high', selector:sel(textEl),
+              description:`Card icon overlaps text label "${label}" by ${Math.round(overlapX)}px at ${vw}px viewport. Add padding-right to the label container or constrain the icon with position/size to prevent overlap.`,
+              bbox: bb(textEl) });
+            break;
+          }
+        }
+      }
+    }
+  }
+
   return out;
 }
 ```
@@ -331,3 +442,4 @@ viewportSensitive: true
 | gridCollapseIssue | medium | "CSS Grid has {N} fixed columns at {vw}px without auto-fit/minmax — overflows instead of collapsing" |
 | gridCollapseIssue | medium | "Flex container has flex-wrap:nowrap with {N} children and overflows at {vw}px — items don't wrap" |
 | stickyHeaderTooTall | medium | "Sticky/fixed header is {h}px tall at {vw}px mobile — exceeds 15% of viewport height" |
+| cardIconOverlapsText | high | "Card icon overlaps text label '{label}' by {N}px at {vw}px viewport" |

@@ -32,8 +32,10 @@
  *   .tmp/<run-id>/coverage-missing.json      — exact (cell × skill) pairs to re-run
  *
  * EXIT CODES
- *   0 — every applicable passive (cell × skill) pair has a receipt → COMPLETE
- *   1 — one or more pairs missing → INCOMPLETE (coverage-missing.json lists them)
+ *   0 — every applicable (cell × skill) pair is evidenced → COMPLETE
+ *       (passive: probe-receipt key present; interactive: receipt key present AND evidenced
+ *        via interacted:true / findings>0 / non-empty skipReason — a bare stub does NOT count)
+ *   1 — one or more pairs missing or stubbed → INCOMPLETE (coverage-missing.json lists them)
  *   3 — inputs missing (skill-probes.json / audit-plan.json not found) → cannot gate
  */
 
@@ -114,14 +116,38 @@ let expected = 0, covered = 0, expPassive = 0, expInteractive = 0;
 const missingPairs = [];
 const missingBySkill = {};
 
+// An INTERACTIVE skill key being PRESENT is not enough — a context-starved worker can
+// stub every key as {ran:false} (or {ran:true,interacted:false,findings:0}) without ever
+// driving the control, and the run would falsely report full coverage. So for interactive
+// skills we require EVIDENCE the skill actually did something:
+//   • interacted:true            — it drove the control, OR
+//   • findings > 0               — it produced findings, OR
+//   • a non-empty skipReason     — a legit precondition-absent skip (no form / no table / no tabs)
+// A present key with none of these = a stub → NOT covered → re-dispatched.
+// Passive skills are unchanged: a probe returning [] is a valid self-skip, so key-presence
+// alone proves the passive probe executed.
+function interactiveEvidenced(v) {
+  if (v == null) return false;
+  if (typeof v !== 'object') return true;                                   // back-compat: bare truthy mark
+  if (v.skipped === 'scout') return true;                                   // page-scout intentional skip — counts as covered
+  if (typeof v.skipReason === 'string' && v.skipReason.trim() !== '') return true;
+  if (v.interacted === true) return true;
+  if (typeof v.findings === 'number' && v.findings > 0) return true;
+  return false;                                                             // present but stubbed, no evidence
+}
+
 function gate(skill, cell, receipt, kind) {
   if (!appliesTo(skill, cell)) return;
   expected++; if (kind === 'passive') expPassive++; else expInteractive++;
-  const ran = receipt && Object.prototype.hasOwnProperty.call(receipt, skill.name);
+  const present = receipt && Object.prototype.hasOwnProperty.call(receipt, skill.name);
+  const ran = kind === 'interactive'
+    ? present && interactiveEvidenced(receipt[skill.name])   // interactive needs EVIDENCE, not just a key
+    : present;                                               // passive: key-presence proves execution
   if (ran) { covered++; return; }
   missingPairs.push({
     cellId: cell.id, route: cell.route, viewport: cell.viewport,
     viewportClass: cell.viewportClass, browser: cell.browser, skill: skill.name, kind,
+    reason: (kind === 'interactive' && present) ? 'interactive-stub-no-evidence' : 'no-receipt-key',
   });
   missingBySkill[skill.name] = (missingBySkill[skill.name] || 0) + 1;
 }
@@ -166,5 +192,18 @@ if (missingPairs.length > 0) {
   process.exit(1);
 }
 
-console.log('   ✓ COMPLETE — every applicable passive skill has a probe receipt on every applicable cell.\n');
+console.log('   ✓ COMPLETE — every applicable PASSIVE skill has a probe receipt, and every applicable INTERACTIVE skill has an evidenced receipt (interacted / findings / skipReason), on every applicable cell.\n');
+
+// Write .gate-pass token so file-bugs.cjs can verify receipts haven't been edited since this gate ran.
+// The token holds a SHA-256 hash of all receipt files. file-bugs.cjs re-hashes and compares — a mismatch
+// means someone hand-edited a receipt after the gate passed, which is the known fabrication vector.
+const crypto = require('crypto');
+const gh = crypto.createHash('sha256');
+for (const f of fs.readdirSync(ISSUES_DIR).sort()) {
+  if (!/-(probes|interactive|sequence)\.json$/.test(f)) continue;
+  gh.update(f); gh.update(fs.readFileSync(path.join(ISSUES_DIR, f)));
+}
+const receiptsHash = gh.digest('hex');
+fs.writeFileSync(path.join(RUN_DIR, '.gate-pass'), JSON.stringify({ runId: RUN_ID, receiptsHash, passedAt: new Date().toISOString() }));
+console.log(`   🔒 .gate-pass token written (receipts hash ${receiptsHash.slice(0, 12)}…) — file-bugs.cjs may now run.\n`);
 process.exit(0);

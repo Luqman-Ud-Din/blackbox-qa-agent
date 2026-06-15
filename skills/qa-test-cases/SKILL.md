@@ -3,13 +3,12 @@ name: qa-test-cases
 section: interactive
 description: "Executes human-written test cases the user wrote in the AUDITED REPO (project-local test_cases.md, auto-detected at audit start). Falls back to the plugin's shipped test-cases/{appName}.md."
 model: sonnet
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
 selfSkip: "if no project-local test_cases.md is found in the audited repo AND no {plugin-root}/test-cases/{appName}.md exists"
 ---
-
 ## Two roots — read project-local FIRST
 
 The plugin's CODE lives in the cache; the user's DATA (config, test cases, output) lives in the repo being audited. Resolve both:

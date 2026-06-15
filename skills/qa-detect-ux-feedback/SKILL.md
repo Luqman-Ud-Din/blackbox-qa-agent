@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasActionButtons, hasForms, hasInlineAlerts]
 ---
 
 ## What it catches — 8 issue types
@@ -17,9 +18,11 @@ viewportSensitive: false
 | `modalNoCloseButton` | high | Open dialog/modal has no visible close button (X icon, "Close", "Cancel"). User has no clear exit. |
 | `modalNoEscDismiss` | medium | Open modal has no `data-dismiss`, no `aria-modal`, and no detected ESC key handler — keyboard users can't close it. |
 | `modalNoBackdropDismiss` | low | Open modal has backdrop element but no detected click handler to dismiss on backdrop click. |
-| `searchNoClearButton` | low | Visible search input (>20 chars typed OR placeholder mentions "search") has no visible clear (X) button. |
 | `searchPlaceholderTooGeneric` | low | Search input placeholder is a generic 1-3 word phrase ("Search budgets...") while the adjacent table has 3+ searchable text columns — users don't know which fields will be searched |
 | `loadingNoIndicator` | medium | Element matched `aria-busy="true"` or `[class*="loading"]` is present but has no visible spinner/progress text inside. |
+| `staleSyncTimestamp` | high | Page shows "Last synced: Xh ago" (> 1 hour old) while a sync/refresh button exists — clicking sync didn't update the timestamp, data is stale. |
+
+> **Moved out:** `searchNoClearButton` is now produced by the interactive skill [qa-test-data-controls](../qa-test-data-controls/SKILL.md) (it must type real keystrokes before it can judge whether a clear button conditionally appears).
 
 ## Probe (browser_evaluate)
 
@@ -155,6 +158,49 @@ viewportSensitive: false
     }
   }
 
+  // ── Stale sync timestamp ─────────────────────────────────────────────────
+  // Detects "Last synced: 5h ago" / "Last updated: 2 hours ago" indicators where
+  // the data is > 1 hour old AND a sync/refresh button is present on the page.
+  // Scenario: user clicks "Refresh Sync" but the timestamp never updates — sync pipeline failure.
+  const SYNC_LABEL = /last\s+sync(?:ed)?|last\s+updat(?:ed?)|sync(?:ed)?\s+\d|updated\s+\d|synced\s+\w+\s+ago|refreshed\s+\w+\s+ago/i;
+  // Stale = ≥ 2 hours ago, or any number of days/weeks/months, or "yesterday"
+  const STALE_TIME = /\b([2-9]\d*|\d{2,})\s*h(?:ours?)?\s*ago\b|\b\d+\s*d(?:ays?)?\s*ago\b|\byesterday\b|\b\d+\s+(?:hours?|days?|weeks?|months?)\s+ago\b/i;
+  const syncEls = [...document.querySelectorAll(
+    'span, p, div, small, time, label, [class*="sync"], [class*="timestamp"], [class*="last-sync"], [class*="last-update"], [class*="refreshed"]'
+  )].filter(el => {
+    if (!visible(el)) return false;
+    const t = (el.innerText || el.textContent || '').trim();
+    return t.length > 0 && t.length <= 120;
+  });
+  for (const el of syncEls) {
+    const text = (el.innerText || el.textContent || '').trim();
+    if (!SYNC_LABEL.test(text)) continue;
+    if (!STALE_TIME.test(text)) continue;
+    // Look for a sync/refresh button anywhere on the page
+    const allBtns = [...document.querySelectorAll('button, [role="button"], a.btn')].filter(visible);
+    const syncBtn = allBtns.find(b => {
+      const label = ((b.innerText || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '')).toLowerCase();
+      return /sync|refresh|reload|update|re-?sync/.test(label);
+    });
+    const staleMatch = text.match(STALE_TIME);
+    out.push({
+      issueType: 'staleSyncTimestamp', severity: 'high',
+      selector: sel(el), bbox: bb(el),
+      description: `Data is stale: "${text.slice(0, 80)}" — last sync was ${staleMatch ? staleMatch[0] : 'more than 1 hour ago'}. ${syncBtn ? `A "${(syncBtn.innerText || '').trim().slice(0,20)}" button exists but clicking it did not refresh the timestamp — investigate the sync pipeline (background job, API endpoint, or UI state not updating after sync completes).` : 'No sync/refresh button found to trigger a manual refresh.'}`
+    });
+    break; // one finding per page
+  }
+
+  // ── searchNoClearButton check moved to qa-test-data-controls ──
+  // Why this used to be here and now isn't: clear-X buttons in modern apps are
+  // conditional on the input having a value, and that value-state is owned by
+  // the framework (React/Angular/Vue), not the DOM. Setting `input.value` via
+  // the native setter + dispatching synthetic `input` events from a passive
+  // probe does NOT trigger framework re-renders the way real keystrokes do, so
+  // the clear button never appeared and EVERY search input got falsely flagged.
+  // The check now lives in qa-test-data-controls where a real `browser_type`
+  // tool is available — see "Clear button after typing" in that skill.
+
   return out;
 }
 ```
@@ -164,3 +210,4 @@ viewportSensitive: false
 - Self-skips: page with no tables/lists/modals/loading states returns []
 - Modal checks only fire when a modal is currently OPEN (so empty result on most cells is correct)
 - The `tableNoEmptyState` is high-impact on data-driven apps with frequent empty states
+- `searchNoClearButton` types a test value first — never checks empty-state DOM, avoids false positives on apps with conditional clear buttons

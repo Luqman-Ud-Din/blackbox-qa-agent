@@ -154,7 +154,7 @@ async function captureAnnotated(bugId, issue) {
   const vp = VIEWPORTS.find(v => v.class === issue.viewportClass) || VIEWPORTS[0];
   const page = await context.newPage();
   try {
-    await page.setViewportSize({ width: vp.width, height: vp.height });
+    if (vp.width && vp.height) await page.setViewportSize({ width: vp.width, height: vp.height });
     await page.goto(BASE_URL + issue.route, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
     const safe = (s) => String(s).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40);

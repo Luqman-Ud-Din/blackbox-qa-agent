@@ -146,6 +146,8 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 | 5 | **NEVER use bash heredoc to embed Node scripts.** `node - <<EOF`, `node -e "..."`, and similar patterns are BANNED. They corrupt JS template literals (backticks, `$`, quotes) on Windows and are fragile on macOS/Linux. ALWAYS use the Write tool to create a `.cjs` file, then `node "{abs-path}"`. | Write �  Bash run, never inline heredoc |
 | 6 | NEVER access any path outside `{project-root}` | Confine all reads/writes/subprocesses to `{project-root}/.claude/` and `{project-root}/.tmp/` |
 | 7 | Questions only at 5 interaction points: greeting, Step 0.5 welcome, Step 0.75 menu, Step 1.5 settings confirmation, Step 1.5 ADO credentials (only when needed). After Y/S at Step 1.5, run autonomously to completion | No mid-pipeline pauses |
+| 8 | **MCP mandate — route discovery uses the MCP path when any `mcp__playwright__*` tool is callable. Confirm by calling `browser_navigate(baseUrl + '/')` at the start of Step 3. If it succeeds → MCP is available → writing any `.cjs` discovery script is BANNED for this run. The fallback `.cjs` path exists only for sessions where zero MCP tools respond.** | Abort script write immediately; log "MCP available — fallback discovery path is forbidden" |
+| 9 | **Bundle text must NEVER enter the main context window. JS bundle content (minified, hundreds of KB) must be extracted IN THE BROWSER via `probe.extractBundleRoutes` which runs regex inside the browser and returns only `[{path}]` — never raw text. NEVER write bundle content to any file and then Read it. NEVER pass raw bundle text as a string argument.** The historical root cause of 9-minute/24K-token route discovery: a 267KB bundle was written to disk and Read back, consuming 123K tokens in one call. | Stop and use `probe.extractBundleRoutes` instead. If you see yourself about to call the Read tool on any file > 10KB that contains `.js` bundle content — that action is banned. |
 
 ---
 
@@ -173,13 +175,13 @@ Argus runs a full autonomous audit. Pipeline: preflight �  route discovery �
 
 Claude reads each skill's `SKILL.md` at runtime — names only listed here. **This list is the single source of truth and is generated from `ls skills/`. Do NOT dispatch any skill name not in this list.**
 
-- **Pipeline (9):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
+- **Pipeline (10):** `qa-argus`, `qa-argus-ready`, `qa-argus-setup`, `qa-bug-filer`, `qa-cell-worker`, `qa-coverage-report`, `qa-page-scout`, `qa-phase-strategy`, `qa-preflight`, `qa-route-discovery`
 - **Detection (43):** `qa-detect-a11y`, `qa-detect-adaptive-state`, `qa-detect-breakpoint-boundary`, `qa-detect-breakpoint-edge`, `qa-detect-console-errors`, `qa-detect-content-patterns`, `qa-detect-css-compat`, `qa-detect-dark-mode`, `qa-detect-dropdown-viewport-clip`, `qa-detect-fluid-sweep`, `qa-detect-forced-colors`, `qa-detect-hidden-resources`, `qa-detect-hover-touch`, `qa-detect-images`, `qa-detect-layout`, `qa-detect-loading`, `qa-detect-loading-states`, `qa-detect-mobile-keyboard`, `qa-detect-modal-viewport-fit`, `qa-detect-network-errors`, `qa-detect-orientation`, `qa-detect-orientation-flip`, `qa-detect-overflow`, `qa-detect-overflow-controls`, `qa-detect-reduced-motion`, `qa-detect-reflow`, `qa-detect-responsive-images`, `qa-detect-rtl-layout`, `qa-detect-safe-area`, `qa-detect-sticky-scroll`, `qa-detect-touch`, `qa-detect-touch-interactions`, `qa-detect-typography`, `qa-detect-typography-advanced`, `qa-detect-typography-responsive`, `qa-detect-video`, `qa-detect-viewport-meta`, `qa-detect-viewport-parity`, `qa-detect-viewport-units`, `qa-detect-visual-regression`, `qa-detect-web-vitals`, `qa-detect-word-break`, `qa-detect-zoom-200`
 - **UX (33, expanded 2026-06-09):** `qa-detect-ux-actions`, `qa-detect-ux-active-state`, `qa-detect-ux-affordance`, `qa-detect-ux-alignment`, `qa-detect-ux-breadcrumb`, `qa-detect-ux-card-consistency`, `qa-detect-ux-card-usage`, `qa-detect-ux-chart-render`, `qa-detect-ux-cross-page-theme`, `qa-detect-ux-empty-state-conflict`, `qa-detect-ux-feedback`, `qa-detect-ux-format-consistency`, `qa-detect-ux-hover`, `qa-detect-ux-icons`, `qa-detect-ux-input-width`, `qa-detect-ux-media-shape`, `qa-detect-ux-modal-form`, `qa-detect-ux-nav-icons`, `qa-detect-ux-overlap`, `qa-detect-ux-page-header`, `qa-detect-ux-pagination`, `qa-detect-ux-required-state`, `qa-detect-ux-selected-color-mix`, `qa-detect-ux-spacing`, `qa-detect-ux-symmetry`, `qa-detect-ux-table-data`, `qa-detect-ux-table-layout`, `qa-detect-ux-theme-consistency`, `qa-detect-ux-toast-notification`, `qa-detect-ux-toolbar-consistency`, `qa-detect-ux-truncation`, `qa-detect-ux-whitespace`, `qa-detect-ux-widget-cramping`
 - **Form (6, consolidated 2026-06-03):** `qa-form-a11y`, `qa-form-flow`, `qa-form-input-types`, `qa-form-security`, `qa-form-structure`, `qa-form-validation`
 - **Functional (19):** `qa-test-auth-flow`, `qa-test-cases`, `qa-test-crud`, `qa-test-data-controls`, `qa-test-dragdrop`, `qa-test-export`, `qa-test-filter-accuracy`, `qa-test-history`, `qa-test-i18n`, `qa-test-idempotency`, `qa-test-keyboard`, `qa-test-mobile-nav`, `qa-test-navigation`, `qa-test-permissions`, `qa-test-states`, `qa-test-theme`, `qa-test-upload-e2e`, `qa-test-widgets`, `qa-test-workflow`
 - **Review (3):** `qa-review-content`, `qa-review-hidden-text`, `qa-vision-review`
-- **Total: 113 skills**
+- **Total: 114 skills**
 
 ---
 
@@ -646,31 +648,16 @@ LOG: "�xa� Step 5: Running skill checks"
 
 No permanent runner. The orchestrator drives the browser via Playwright MCP tools (or inline Bash + Playwright fallback) and dispatches each cell's work on the model the skill declares.
 
-#### 5.0.A — Bundle probes + build coverage ledger (MANDATORY — do this BEFORE workers are dispatched)
+#### 5.0.A — Build the skill bundle (IN-MEMORY, skills-only) + coverage ledger (MANDATORY — before workers)
 
-🚨 **FIRST: run bundle-probes.cjs.** This reads EVERY enabled skill's SKILL.md, extracts probe expressions and frontmatter, and writes them to `skill-probes.json`. Workers read this ONE file — they do NOT use model memory to decide which skills to run. This is the fix for the bug where workers ran only ~12 skills from training memory.
+🚨 **SKILLS-ONLY — NO scripts.** Build the enabled-skill list yourself by reading config + skill files, so workers do NOT use model memory to decide what runs:
+1. Read `customize.toml [detectors]` → every key set `= true` is enabled (PLUS the enabled functional / content / vision skills).
+2. For EACH enabled skill, read its `{project-root}/skills/{name}/SKILL.md` and extract: frontmatter (`model`, `applyOn`, `viewportSensitive`, `interactive`, `section`) and its probe (the first ```js code block, if any).
+3. Hold this list as `skillProbeBundle` in memory — `{ name, model, applyOn, viewportSensitive, interactive, section, probe }` per skill — AND write it to `{project-root}/.tmp/{runId}/skill-probes.json` using the **Write tool** (a plain data file, NOT a script — same as the coverage ledger). This is the ONE source of the skill list, passed verbatim into every worker dispatch (Step 5.1b `enabledSkills`) and read by the coverage verifier. NEVER use model memory for the list.
 
-```
-node "{project-root}/scripts/bundle-probes.cjs" "{runId}"
-```
+🚨 **SECTION SCOPING.** Each skill carries a `section:` tag — `interactive`, `responsiveness`, `accessibility`, `visual`, `content`, `performance`. When the prompt asks for a section ("interactive only", "responsiveness only", "just accessibility", "content section"…), keep ONLY skills whose `section:` matches — drop the rest. This is what makes "interactive only" run ~10 skills in ~8 min instead of dragging in the ~14 responsiveness/perf detectors. Map: "interactive/functional"→`interactive`, "responsive/layout/viewport/breakpoint"→`responsiveness`, "a11y/accessibility"→`accessibility`, "typography/images/visual/ux"→`visual`, "grammar/spelling/content/copy"→`content`, "performance/web vitals/speed/errors"→`performance`. No section requested → full audit.
 
-🚨 **SECTION SCOPING (2026-06-09).** Every skill now carries a `section:` frontmatter tag — one of: `interactive`, `responsiveness`, `accessibility`, `visual`, `content`, `performance`. When the user's prompt asks for a specific section (e.g. "interactive only", "only interactive skills", "responsiveness only", "just accessibility", "content section"), you MUST pass `--section <name>` (comma-separate multiple) so ONLY that section's skills bundle and run — nothing else:
-```
-node "{project-root}/scripts/bundle-probes.cjs" "{runId}" --section interactive
-```
-This is what makes "interactive only" run ~10 functional skills in ~8–10 min instead of dragging in the ~14 responsiveness/perf detectors (web-vitals, breakpoint, fluid-sweep, zoom, rtl, dark-mode, sticky-scroll, modal-fit, dropdown-clip…) that made one page take 40 min. Map natural language → section: "interactive/functional"→`interactive`, "responsive/layout/viewport/breakpoint"→`responsiveness`, "a11y/accessibility"→`accessibility`, "typography/images/visual/ux"→`visual`, "grammar/spelling/content/copy"→`content`, "performance/web vitals/speed/errors"→`performance`. With NO section requested, omit `--section` (full audit). The coverage ledger, run-passive-probes, and coverage-gate all key off the bundled set, so a section run is fully self-consistent.
-
-Expected output: `✓ passive skills (have probe): 39   ✓ interactive (MCP-driven): 35`
-If this fails, HARD STOP — do not dispatch workers without the probe bundle.
-
-After bundle-probes.cjs succeeds, immediately read the output file and hold it in memory:
-```
-skillProbeBundle = JSON.parse( read("{project-root}/.tmp/{runId}/skill-probes.json") )
-```
-This variable is passed verbatim into every worker dispatch prompt (Step 5.1b `enabledSkills`).
-This is the ONLY source of the skill list — never use model memory.
-
-🚨 This step is what makes silent skips impossible. The audit's deliverable is NOT "some findings" — it is a COMPLETE LEDGER proving every applicable (cell × skill) pair was accounted for. The run may not finish until the ledger is complete (enforced in Step 5.9).
+🚨 This step makes silent skips impossible. The deliverable is NOT "some findings" — it is a COMPLETE LEDGER proving every applicable (cell × skill) pair was accounted for. The run may not finish until the ledger is complete (enforced in Step 5.9).
 
 1. Read `{project-root}/.tmp/{runId}/audit-plan.json` → the full cell list (every route × viewport × browser). Assign each cell a STABLE id `cell-NNN` in plan order (001, 002, …). These ids are fixed for the whole run and are what `--resume` keys on.
 
@@ -697,40 +684,21 @@ This is the ONLY source of the skill list — never use model memory.
 
 Every `expected` line MUST become `done` / `clean` / `skipped` / `error` (Step 5.4 j.1) before the audit may finish. Any line left `expected` is a silent skip — Step 5.9's finish-gate will catch it and re-run or surface it.
 
-#### 5.0.B — Run ALL passive probes DETERMINISTICALLY (MANDATORY — do this BEFORE model workers)
+#### 5.0.B — Passive detection = ONE batched `browser_evaluate` per cell (skills-only, NO script)
 
-🚨 **This is the production fix for skill-collapse + fabrication.** The 57 passive probes are deterministic JavaScript — they need no model judgment. Running them through a model (MCP `browser_evaluate` driven by a worker) is what collapsed 57→9 and invented issueTypes. Instead, execute them as real Playwright code:
+🚨 **SKILLS-ONLY.** There is NO passive-probe script. Passive detection happens in the per-cell loop (Step 5.4 e) as **ONE batched `browser_evaluate`** that runs ALL applicable passive probes in-page and returns every result together. This keeps it cheap and fast WITHOUT a script:
+- **Batch, never one-by-one:** include EVERY applicable passive skill's probe in a SINGLE `browser_evaluate` call (the in-page loop runs them all in ~100-200ms). Do NOT make one call per skill — that is the 40-minute mistake.
+- **Run the batch on Haiku** (`model: haiku` skills). The browser computes the result; the model only transcribes it — so Haiku is exact, not lossy. This is why the batch is cheap.
+- **Compact returns:** each probe returns only `{issueType, selector, bbox}` — NEVER pull a full `browser_snapshot` into context (that is the biggest token cost).
+- **No fabrication by construction:** the probe list comes from `skillProbeBundle` (Step 5.0.A), the batched call returns one key per skill, and the Step 5.4 e assertion verifies every skill in the batch returned a result. A skill returning `[]` self-skipped (normal). Anything missing from the result = ABORT (you dropped a probe).
 
-```
-node "{project-root}/scripts/run-passive-probes.cjs" "{runId}" --browsers={comma-separated engines from resolvedConfig.browsers}
-```
+#### 5.0.C — Interactive skills = MODEL-DRIVEN per cell (skills-only, adaptive, NO script)
 
-This launches each engine, logs in once (reading creds from `secrets.json → apps[appName]`), and for EVERY cell runs ALL 57 passive probes in one `page.evaluate` — a code `for`-loop that **cannot** skip a skill or rename an issueType. It writes, per cell:
-- `issues/{cellId}.jsonl` — findings, VERBATIM from the probe (real issueTypes, real `getBoundingClientRect` bboxes → annotatable)
-- `issues/{cellId}-probes.json` — the passive coverage receipt (all 57 skill keys)
-- `screenshots/{cellId}-base.png` — the base screenshot
-
-Expected output: `✓ {cellId} … — 57/57 probes, N findings` for every cell. If a cell shows fewer than 57 probes, or the run errors, surface it — do NOT proceed to filing.
-
-🚨 **AWAIT BEFORE CONTINUING — DO NOT DISPATCH WORKERS UNTIL THIS EXITS.**
-`run-passive-probes.cjs` writes every `issues/{cellId}.jsonl` and `issues/{cellId}-probes.json`. Workers that start while the script is still running will clobber those files (confirmed failure in run qa-20260605-ghazali-001: cells 84-120 overwritten by stub 214-byte worker receipts). Wait for exit code 0 before proceeding.
-
-If the script exits non-zero: surface the error, do NOT proceed to workers or filing. The passive layer must be complete first.
-
-**After this step the passive layer is DONE and PROVEN** (coverage-gate Step 5.9.0 confirms 100% passive). Model workers (Step 5.1b) now drive **ONLY the 35 interactive skills** per cell — they MUST NOT re-run passive probes (already complete and verbatim). Each worker appends interactive findings to the existing `{cellId}.jsonl` and writes `{cellId}-interactive.json` (the interactive receipt). This split — deterministic passive + model-driven interactive — is what makes "all skills run, none fabricated" true by construction instead of by hoping the model complies.
-
-#### 5.0.C — Run the DETERMINISTIC interactive driver (MANDATORY when interactive skills are enabled — do this AFTER 5.0.B, BEFORE model workers)
-
-🚨 **This is the reliability fix (2026-06-09).** The model-driven interactive layer (Step 5.1b) is fragile: it drifts, stalls on context-compaction, falls back to passive-only, and re-logs-out on short-TTL/401 apps — which made one page take 40 min and silently dropped coverage. `run-interactive-probes.cjs` drives the **highest-value, most-common interactive checks in deterministic code** — search/sort/page-size **with real correctness assertions** (row order actually changed, results actually contain the term, footer-vs-DOM render cap) and form validation (whitespace-accepted, empty-submit-disabled). It is **auth-resilient** (auto re-login when a cell bounces to login) and **resumable** (`--resume` skips finished cells), so it never silently truncates.
-
-```
-node "{project-root}/scripts/run-interactive-probes.cjs" "{runId}" --browsers={engines} [--resume]
-```
-
-- Each finding it writes carries an `evidence` before/after measurement → **self-verifying, ~0 false positives** (it emits ONLY when the assertion holds).
-- It appends to `issues/{cellId}.jsonl` and writes `issues/{cellId}-interactive.json` marking `qa-test-data-controls` / `qa-form-validation` as `done`/`clean`/`skipped` with evidence.
-- **AWAIT exit before continuing.** Like 5.0.B, do not start model workers until this exits.
-- Model workers (Step 5.1b) then cover the REMAINING interactive skills it doesn't handle (states, widgets, keyboard, navigation, crud-with-cleanup, auth-flow, etc.) — and MUST NOT re-emit `qa-test-data-controls` / `qa-form-validation` findings (already done deterministically; re-emitting would duplicate). This deterministic-first split is what gets a typical page's interactive layer reliable AND fast (~3-4s for the data-control/validation checks vs minutes of model driving).
+🚨 **SKILLS-ONLY and intentionally model-driven** — this is what lets the agent handle ANY new form / page / site WITHOUT new code. There is NO interactive-driver script. In the per-cell loop (Step 5.4 g), the model drives each interactive skill's sequence (click / type / submit / read) per its `SKILL.md`, adapting to whatever the page actually is:
+- **Self-skip first:** a quick `browser_evaluate` checks the skill's preconditions (no form / no table / no nav → ledger-mark `skipped` with the reason). Most interactive skills self-skip on most pages, so they cost almost nothing there.
+- **Drive on the skill's declared model:** judgment/driving skills (`qa-form-validation`, `qa-form-flow`, `qa-form-input-types`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-dragdrop`, `qa-test-i18n`, `qa-test-keyboard`, plus the existing Sonnet set) run on **Sonnet** — the model reads the form, fills it, submits, and interprets the result. The deterministic ones (`qa-test-data-controls`, `-history`, `-idempotency`, `-states`, `-theme`) run on Haiku (clear pass/fail assertions).
+- **Viewport pinning (token reshape):** every functional-flow skill above is `applyOn: [laptop]` — its behavior is viewport-invariant, so it is driven ONCE on the laptop (1280) cell, not 4× across all viewports. `qa-test-mobile-nav` stays `applyOn: [mobile, tablet]` (the drawer only exists at small widths). Mobile-only interactive detectors (`qa-detect-touch-interactions`, `qa-detect-mobile-keyboard`, `qa-detect-reflow`, `qa-detect-orientation*`) keep their existing mobile/tablet scoping. This is what makes the interactive sweep ~60 cells instead of 180 while still driving filters/sort/modals/CRUD where the controls are actually visible (full layout) rather than collapsed behind a hamburger on mobile.
+- This adaptivity is the whole point: a form it has never seen just works, because the model — not a script — drives it.
 
 #### 5.1 � Determine enabled skills + model routing
 
@@ -875,23 +843,60 @@ for each w in workerList:
 // Example: 3 engines × 4 viewports, 16 routes → 12 workers × ~16 cells each.
 ```
 
-**Parallel dispatch — one Agent call per worker, in ONE message:**
+🚨 **WAVE SPLIT — MANDATORY when a server has more than `cells_per_worker` cells (THE fix for "full-site audit drops interactive skills").**
 
-The orchestrator emits exactly `workerList.length` Agent calls in a SINGLE assistant message. Each Agent gets its own conversation context AND its own engine-pinned MCP server (= its own browser window of the correct engine).
+A single worker Agent call has ONE finite context window. When its `cells[]` is large (e.g. 34 routes at one viewport), the worker saturates its context by cell ~10 and silently stops driving the ~35 interactive skills — it keeps only the cheap one-shot passive probe batch. That is exactly why a whole-site audit shows fewer skill types than a 2-page audit. The cure is to never let one Agent call hold too many cells: split each server's cells into **waves** of at most `cells_per_worker`, and dispatch the waves SEQUENTIALLY. Each wave is a fresh Agent call = fresh context = full attention to drive every interactive skill.
 
 ```
-// IN ONE MESSAGE — one Agent tool call per (engine × viewport) worker.
+const CPW = resolvedConfig.resilience.cells_per_worker || 8
+
+// For each server, chop its cells into ordered waves of ≤ CPW cells.
+for each w in workerList:
+  w.waves = chunk(w.cells, CPW)        // e.g. 34 cells, CPW=8 → [8,8,8,8,2] = 5 waves
+const maxWaves = max(w.waves.length across workerList)   // longest server decides the wave count
+
+// PHASE-ORDER NOTE: pre-login cells (login page / phase 1) MUST sit in wave 0 so the
+// unauthenticated state is captured before any worker logs in. When chunking, sort each
+// server's cells so preLoginCells come first (see qa-cell-worker Step 2 phase ordering),
+// THEN chunk — this keeps phase-1 cells in the first wave automatically.
+```
+
+**Parallel-then-sequential dispatch — one Agent call per server PER WAVE:**
+
+The orchestrator runs `maxWaves` rounds. In each round it emits one Agent call per server that still has a wave left, ALL in a SINGLE assistant message (parallel across servers), then WAITS for that round to finish before starting the next. Within a server the waves are strictly sequential (same browser, fresh context each); across servers they run in parallel.
+
+```
+for waveIdx in 0 .. maxWaves-1:
+  // ONE message: one Agent call per server whose waves[waveIdx] exists.
+  // Each call's cells[] = w.waves[waveIdx]  (≤ CPW cells — small enough to drive EVERY skill).
+  // The login step (qa-cell-worker Step 2) re-runs each wave because the browser is isolated;
+  //   if waveIdx > 0 the session may persist — the worker's URL-verify + login-idempotency
+  //   handles both cases (it only logs in if it lands on the login page).
+  dispatch all servers' waveIdx Agent calls in ONE message → WAIT for all to return → next wave
+```
+
+The first wave still emits exactly `workerList.length` Agent calls in ONE message. Each Agent gets its own conversation context AND its own engine-pinned MCP server (= its own browser window of the correct engine). Subsequent waves reuse the same servers with fresh worker contexts.
+
+🚨 **Why sequential-per-server, not all-at-once:** two Agent calls cannot safely share one MCP browser server (they collide on the same browser window). So a server's waves MUST run one after another. The parallelism is ACROSS servers (engines × viewports), not within one. This keeps true Nx parallelism while capping per-context cell count.
+
+```
+// PER WAVE — emit one Agent tool call per server that has a wave[waveIdx], ALL IN ONE MESSAGE.
+// Loop the block below once per wave (waveIdx 0..maxWaves-1); WAIT for each wave to fully
+// return before dispatching the next. Within a wave the calls run in parallel across servers.
 // 🚨 subagent_type MUST be "general-purpose" — "qa-cell-worker" is a SKILL, not a spawnable
 //    agent type; passing it makes the Agent tool silently fall back and the model collapse
-//    your 4/8/12 workers into 2 arbitrary chunks (the observed "2 general-purpose workers" bug).
-//    Emit EXACTLY workerList.length Agent calls (one per engine×viewport) — never fewer.
-for (let i = 0; i < workerList.length; i++) {
-  const { serverName, engine, viewportClass, viewport, cells } = workerList[i];
+//    your workers into 2 arbitrary chunks (the observed "2 general-purpose workers" bug).
+//    Each wave emits one Agent call per server that still has cells — never fewer.
+const waveServers = workerList.filter(w => w.waves[waveIdx])   // servers with a wave this round
+for (let i = 0; i < waveServers.length; i++) {
+  const { serverName, engine, viewportClass, viewport, waves } = waveServers[i];
+  const cells = waves[waveIdx];                                 // ≤ cells_per_worker cells
   Agent({
     subagent_type: "general-purpose",
-    description: `Worker ${i+1}/${workerList.length} ${engine}×${viewportClass} on ${serverName}: ${cells.length} cells`,
-    prompt: `You are worker ${i} of ${workerList.length}, testing ${engine} at the ${viewportClass} viewport (${viewport.width}×${viewport.height}).
+    description: `Wave ${waveIdx+1}/${maxWaves} worker ${engine}×${viewportClass} on ${serverName}: ${cells.length} cells`,
+    prompt: `You are the ${engine} ${viewportClass} worker (wave ${waveIdx+1} of ${maxWaves}), viewport ${viewport.width}×${viewport.height}.
 Read and follow {project-root}/skills/qa-cell-worker/SKILL.md EXACTLY for your per-cell loop.
+🚨 You have ONLY ${cells.length} cells this wave (cap = cells_per_worker). Drive EVERY skill — passive AND all interactive — on EVERY one of them. You have ample context for this many cells; there is NO excuse to skip the interactive skills. Skipping interactive skills is the bug this wave-split exists to prevent.
 FIRST call mcp__${serverName}__browser_resize(${viewport.width}, ${viewport.height}) — your browser stays this size for all your cells.
 
 🚨 YOUR DEDICATED MCP SERVER: "${serverName}"
@@ -917,7 +922,7 @@ Run context:
 Read {projectRoot}/.tmp/${runId}/skill-probes.json at the start of Step 2.
 That file has every skill name, its probe expression, applyOn, and interactive flag.
 Run EVERY passive skill whose applyOn matches your viewportClass.
-This list was built from customize.toml by bundle-probes.cjs — it is the ground truth.
+This list was built in-memory at Step 5.0.A (from customize.toml + each SKILL.md) and written via the Write tool — it is the ground truth.
 
 enabledSkills: ${JSON.stringify(skillProbeBundle.skills.map(s => ({
   name: s.name,
@@ -934,21 +939,25 @@ Follow qa-cell-worker/SKILL.md exactly:
 }
 ```
 
-**After all Agent calls return:**
+**After EACH wave returns:**
 
-The harness blocks the orchestrator until ALL parallel Agent calls finish. Each returned summary is logged:
+The harness blocks the orchestrator until ALL Agent calls in the current wave finish. Log each wave's summaries, then dispatch the next wave. Only after the LAST wave (`waveIdx === maxWaves-1`) returns is per-cell execution complete.
 
 ```
-✅ Parallel execution complete:
-   worker 0: 36/36 cells, 412 findings, 0 timeouts
-   worker 1: 36/36 cells, 388 findings, 1 timeout (cell-052)
-   worker 2: 36/36 cells, 401 findings, 0 timeouts
-   worker 3: 36/36 cells, 394 findings, 0 timeouts
-   Total:    144/144 cells, 1595 findings, 1 timeout
-   Wall time: 24m 18s (vs ~1h 41m sequential — 4.1× speedup)
+✅ Wave 1/5 complete: 4 servers × 8 cells = 32 cells, 410 findings, 0 timeouts
+✅ Wave 2/5 complete: 4 servers × 8 cells = 32 cells, 388 findings, 1 timeout (cell-052)
+   …
+✅ All waves complete:
+   chromium×desktop : 34/34 cells, 412 findings, 0 timeouts  (5 waves)
+   chromium×laptop  : 34/34 cells, 388 findings, 1 timeout    (5 waves)
+   chromium×tablet  : 34/34 cells, 401 findings, 0 timeouts   (5 waves)
+   chromium×mobile  : 34/34 cells, 394 findings, 0 timeouts   (5 waves)
+   Total:    136/136 cells, 1595 findings, 1 timeout
 ```
 
-Each worker has already written its findings to `.tmp/{runId}/issues/cell-XXX.jsonl` — no merge step needed (the issues directory is the shared sink).
+Each worker has already written its findings to `.tmp/{runId}/issues/cell-XXX.jsonl` — no merge step needed (the issues directory is the shared sink). Waves on the same server append to the same issues dir, so the full route set is covered once all waves finish.
+
+🚨 **The coverage gate (Step 5.9) runs ONCE, after ALL waves of ALL servers complete — never per-wave.** It reads the per-cell receipts and will name any (cell × skill) pair — passive or interactive — that no wave produced, and force a re-dispatch of exactly those. This is the hard backstop: even if one wave still drops an interactive skill, the gate catches it by evidence (missing receipt key) and re-runs it.
 
 Proceed to Step 5.7.5 (annotation sweep) as normal.
 
@@ -1024,7 +1033,7 @@ For each cell (route � viewport � browser):
 
        🚨 **INTERACTIVE-BUCKET ASSERTION (mandatory):** ~36 skills carry `interactive: true` — both the true functional tests (forms / data-controls / nav / widgets / states) AND the MCP-sequence detectors (zoom-200, web-vitals, reflow, breakpoint-edge, adaptive-state, orientation-flip, touch-interactions…). ALL of them need a driven MCP sequence (step g) and must NEVER sit in the passive Haiku `browser_evaluate` batch. Two checks, both mandatory:
        1. **Never empty:** if `interactiveSkills.length === 0` while ANY `interactive: true` skill is enabled in customize.toml, you re-introduced the `kind` bug — ABORT with `"ORCHESTRATOR CONTRACT VIOLATED: interactiveSkills is empty but interactive skills are enabled — classify off s.interactive, not s.kind."`
-       2. **Core functional set present:** every one of these enabled-and-applicable skills MUST appear in `interactiveSkills` — `qa-form-validation`, `qa-form-flow`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states` (plus `qa-test-auth-flow` / `qa-test-cases` where enabled). If any enabled one is missing from the bucket, you mis-bucketed it into the passive batch — ABORT with the same contract-violation error. These are the skills that produce the form/pagination/tab/state findings; if they aren't in the driven bucket, the audit is passive-only and worthless for functional coverage.
+       2. **Core functional set present (LAPTOP cells only):** the functional-flow skills are now `applyOn: [laptop]` — their behavior is viewport-invariant, so they are driven once at the canonical full-layout width (laptop 1280) instead of redundantly on all 4 viewports. **This check applies ONLY when `cell.viewportClass === 'laptop'`.** On laptop cells, every one of these enabled-and-applicable skills MUST appear in `interactiveSkills` — `qa-form-validation`, `qa-form-flow`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states` (plus `qa-test-auth-flow` / `qa-test-cases` where enabled). If any enabled one is missing from the bucket on a laptop cell, you mis-bucketed it into the passive batch — ABORT with the same contract-violation error. On mobile/tablet/desktop cells these functional flows are correctly absent (not applicable) and this check is SKIPPED — their absence there is by design, not a bug. These are the skills that produce the form/pagination/tab/state findings; if they aren't in the driven bucket on laptop, the audit is passive-only and worthless for functional coverage.
 
        Sanity check on the SPLIT (not a magic absolute number — the threshold moved when interactive skills were correctly separated out): the Haiku passive batch is now ~15–20 on a typical cell, because the ~35 `interactive: true` skills are (correctly) in the driven bucket, not the passive batch. **The real contract is the exhaustiveness equation above** (`haiku + sonnet + interactive === enabled`), NOT a fixed Haiku count. Only abort for a bypass if that equation fails OR if `haikuBatch` is implausibly small (e.g. < 8) while dozens of passive detectors are enabled — that means you dropped passive probes. Do NOT abort merely because Haiku < 30; post-fix that is the EXPECTED, correct size.
 
@@ -1313,17 +1322,19 @@ After Step 5.7 closes for the LAST cell, run the annotation sweep BEFORE Step 5.
 
 🚨 **DO NOT SKIP THIS STEP.** Annotation is a plugin promise — end users install this plugin expecting annotated screenshots in their ADO tickets. The inline call in Step 5.4(h.3) is best-effort; this sweep is the contract.
 
-**Algorithm — ONE deterministic command for the ENTIRE run (pure Node, no MCP, NO per-cell model decisions).**
+🚨 **SCREENSHOT NAMING RULE (enforced here):** The annotator looks for `{cellId}-base.png` first, then falls back to `{cellId}.png`. When taking screenshots in Step 5.4(h), always save to the ABSOLUTE path `{project-root}/.tmp/{runId}/screenshots/{cellId}-base.png` (`fullPage: true`). If you mistakenly saved as `{cellId}.png`, the annotator will still find it — but fix the naming going forward.
+
+**Algorithm — ONE deterministic Bash command for the ENTIRE run (pure Node, no MCP, NO per-cell model decisions). YOU MUST RUN THIS. It is not optional.**
 
 ```
-Bash("node scripts/annotate-cell.cjs {runId}")     # ← NO cellId = WHOLE-RUN mode
+Bash: node "{project-root}/scripts/annotate-cell.cjs" "{runId}"
 ```
 
-That ONE command iterates every `cell-*.jsonl` in `{project-root}/.tmp/{runId}/issues/` itself, decodes each base PNG, draws the severity-colored bbox boxes (zlib + pixel write), writes `{cellId}-issue-{n}-annotated.png`, and stamps `annotatedScreenshotPath` into every finding. **Because it is ONE command that loops internally, there are no per-cell calls for the orchestrator to skip — this is precisely what fixes the historical "annotation never ran" failure (the old model-driven prepare → MCP-render → finalize pipeline was skipped per cell).** No browser, no MCP, no model in the loop.
+That ONE command iterates every `cell-*.jsonl` in `{project-root}/.tmp/{runId}/issues/` itself, decodes each base PNG (trying `-base.png` then `.png`), draws red bbox boxes + white labels (zlib + pixel write), writes `{cellId}-issue-{n}-annotated.png`, and stamps `annotatedScreenshotPath` into every finding. **Because it is ONE command that loops internally, there are no per-cell calls for the orchestrator to skip — this is precisely what fixes the historical "annotation never ran" failure (the old model-driven prepare → MCP-render → finalize pipeline was skipped per cell).** No browser, no MCP, no model in the loop.
 
 Exit codes (whole-run):
 - **0** — every cell with findings was annotated (or was clean). Done.
-- **2** — one or more cells have findings but are MISSING their base PNG. The command prints the exact ids: `⚠ N cell(s) have findings but NO base PNG ... : cell-001, ...`. For EACH listed cell: re-take its base screenshot to the ABSOLUTE path `{project-root}/.tmp/{runId}/screenshots/{cellId}-base.png` (navigate to that cell's route+viewport, `browser_take_screenshot(fullPage:true)`), then re-run `node scripts/annotate-cell.cjs {runId}` ONCE more. Bounded by `coverage_max_retries`.
+- **2** — one or more cells have findings but are MISSING their base PNG (neither `{cellId}-base.png` nor `{cellId}.png` found). The command prints the exact ids. For EACH listed cell: re-take its base screenshot to `{project-root}/.tmp/{runId}/screenshots/{cellId}-base.png` (navigate to that cell's route+viewport, `browser_take_screenshot(fullPage:true)`), then re-run `node scripts/annotate-cell.cjs {runId}` ONCE more. Bounded by `coverage_max_retries`.
 - **3** — no issues dir (nothing audited).
 
 Behavior:
@@ -1396,15 +1407,46 @@ node "{project-root}/scripts/coverage-gate.cjs" "{runId}"
 
 - **exit 0** → every applicable (cell × skill) pair — passive AND interactive — has a receipt. Coverage is REAL. Proceed to sub-step 1 (screenshots).
 - **exit 1** → INCOMPLETE. `coverage-missing.json` lists the exact `(cellId, skill, kind)` pairs that never executed (and any cells with no receipt at all). **Re-dispatch ONLY those pairs** through the Step 5.4 loop (scoped, same as `--resume`): for each affected cell, re-run the missing PASSIVE skills (full `passiveSkills` batch → re-dump `{cellId}-probes.json`) and/or re-drive the missing INTERACTIVE skills (→ re-dump `{cellId}-interactive.json`), then **GO BACK and re-run `coverage-gate.cjs`.** Loop until exit 0 or `coverage_max_retries` reached. If retries are exhausted with pairs still missing, mark those pairs `degraded` in the ledger with reason `"skill produced no receipt after N retries"` and surface them in the Step 8 report — NEVER present them as covered.
-- **exit 3** → `skill-probes.json` or `audit-plan.json` missing. Re-run `bundle-probes.cjs` (Step 5.0.A); if it still fails, HARD STOP — you cannot verify coverage, so you cannot claim it.
+- **exit 3** → `skill-probes.json` or `audit-plan.json` missing. Re-write `skill-probes.json` per Step 5.0.A (build the bundle in-memory from customize.toml + each SKILL.md, then Write it); if it still fails, HARD STOP — you cannot verify coverage, so you cannot claim it.
 
 **The run may not advance to sub-step 1 until `coverage-gate.cjs` exits 0 (or remaining pairs are explicitly `degraded` after exhausting retries).** "Most skills ran" is not acceptable — the gate names every missing one, passive or interactive, and they get re-run.
+
+##### 5.9.0.5 — Apply `[keep_issuetypes]` filter (MANDATORY, runs after coverage gate, before annotation)
+
+The `[keep_issuetypes]` table in `customize.toml` is the user's noise-filter: for skills that mix real defects with cosmetic findings, ONLY the listed issueTypes should be filed. Without this step, every probe's output reaches ADO and re-introduces the noise the user disabled the skill to remove.
+
+```
+node "{project-root}/scripts/apply-keep-issuetypes.cjs" "{project-root}/.tmp/{runId}"
+```
+
+- Reads `[keep_issuetypes]` from `customize.toml`.
+- For each `issues/cell-*.jsonl`, drops every finding whose `skill` appears in `[keep_issuetypes]` but whose `issueType` is NOT in that skill's keep list.
+- Skills not listed in `[keep_issuetypes]` are untouched.
+- Writes `{runId}/keep-issuetypes-report.json` with per-skill dropped/kept counts.
+- The filter runs in-place — annotation, bug-filing, and the run summary all see the filtered JSONL.
+
+If this script fails (non-zero exit), surface the error in the Step 8 report but proceed — the filter is a noise-reducer, not a correctness gate.
+
+##### 5.9.0.6 — Final repeat-collapse across ALL skills (MANDATORY, runs after keep-issuetypes, before annotation)
+
+A repeated component is ONE bug, not N. The in-page `_collapse` already de-dups the ~70 inject-bundle skills *per call*, but 10 skills bypass the inject (console-errors, network-errors, content-patterns, review-content, review-hidden-text, visual-regression, orientation-flip, viewport-parity, fluid-sweep, test-cases) and their findings reach the cell JSONL un-collapsed. This final pass closes the gap to **80/80**: it collapses every cell's findings with the IDENTICAL key the in-page collapse uses (`issueType` + normalized selector + normalized description, where normalization strips hashed-class suffixes, digits, and quoted literals so data-only variants — e.g. one `td` overflowing 4 different emails — collapse to a single finding tagged `instanceCount`).
+
+```
+node "{project-root}/scripts/collapse-findings.cjs" "{project-root}/.tmp/{runId}"
+```
+
+- Idempotent: already-collapsed singletons pass through untouched (so it's safe even though the inject already collapsed most skills).
+- Keeps the FIRST finding of each group (its bbox annotates one representative instance) and tags `instanceCount` + a "(×N instances … fix once)" note on the description.
+- Runs in-place — annotation, bug-filing, and the run summary all see the collapsed JSONL, so the same icon/cell/word is never filed N times.
+- `_coverage` marks and findings without an `issueType` are never touched.
+
+If this script fails (non-zero exit), surface the error in the Step 8 report but proceed — collapse is a de-duplicator, not a correctness gate.
 
 ##### 5.9.1 — Interactive evidence + annotation (after the evidence gate passes)
 
 1. Read `{project-root}/.tmp/{runId}/coverage-ledger.jsonl`.
 2. Find every line still `status:"expected"` → these are SILENT SKIPS: a (cell × skill) pair that was planned but never ran (this is exactly what dropped tablet + ~48 skills in run-audit1).
-2b. **Interactive-skill evidence check** (restores form/pagination/filter/tab findings). For every interactive skill (`qa-form-validation`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states`, `qa-form-flow`) marked `clean` or `skipped`: a `skipped` mark MUST carry a precondition-absent reason (no form / no table / no tabs). A `clean` mark on a cell whose page DOES contain the skill's target control REQUIRES `interacted: true` + `evidence`. An interactive `clean`/`skipped` mark WITHOUT evidence on a control-bearing page = a PASSIVE-ONLY run (the active tests never fired) → treat it exactly like an `expected` line: re-dispatch that skill on that cell to drive its active phases (step 5.4g), bounded by `coverage_max_retries`. Log: `🧪 Interactive evidence: {ok} verified, {reRun} re-run for passive-only, {n} skills`.
+2b. **Interactive-skill evidence check** (restores form/pagination/filter/tab findings). These functional skills are now `applyOn: [laptop]`, so this check applies ONLY to **laptop cells** — on mobile/tablet/desktop cells they are not applicable and produce no ledger line to evaluate. For every interactive skill (`qa-form-validation`, `qa-test-data-controls`, `qa-test-navigation`, `qa-test-widgets`, `qa-test-states`, `qa-form-flow`) marked `clean` or `skipped` on a laptop cell: a `skipped` mark MUST carry a precondition-absent reason (no form / no table / no tabs). A `clean` mark on a cell whose page DOES contain the skill's target control REQUIRES `interacted: true` + `evidence`. An interactive `clean`/`skipped` mark WITHOUT evidence on a control-bearing page = a PASSIVE-ONLY run (the active tests never fired) → treat it exactly like an `expected` line: re-dispatch that skill on that cell to drive its active phases (step 5.4g), bounded by `coverage_max_retries`. Log: `🧪 Interactive evidence: {ok} verified, {reRun} re-run for passive-only, {n} skills`.
 3. For every cell that has any non-`expected` line, confirm `{project-root}/.tmp/{runId}/screenshots/{cell.id}-base.png` exists. A missing base PNG = that cell needs a re-run (its screenshot landed in the wrong place — see Step 5.4h).
 4. If any `expected` lines OR missing base screenshots remain:
    - **retries so far < `customize.toml [resilience] coverage_max_retries` (default 2)?**

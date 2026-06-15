@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasAnimations, hasTransitions]
 ---
 
 ## What it checks

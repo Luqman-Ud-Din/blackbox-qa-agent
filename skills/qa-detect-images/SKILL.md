@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasImages]
 ---
 
 ## What it checks
@@ -40,15 +41,57 @@ viewportSensitive: false
     return true;
   };
 
+  // Returns true for small UI icons that are purely decorative alongside visible text.
+  // These should have alt="" but are not content-carrying images — flagging them as
+  // missingAlt creates false-positive noise (user sees no "image", just an icon).
+  const isDecorativeIcon = (img) => {
+    const r = img.getBoundingClientRect();
+    // Only applies to small icons (≤ 40×40px render size)
+    if (r.width > 40 || r.height > 40) return false;
+    // Explicitly marked decorative by the developer → fully skip, no issue at all
+    if (img.getAttribute('aria-hidden') === 'true' || img.getAttribute('role') === 'presentation') return true;
+    // Icon-like src filename hint (icon, glyph, sprite, badge, etc.)
+    const src = (img.src || '').toLowerCase();
+    if (/\b(icon|glyph|sprite|badge|avatar|favicon|logo)\b/.test(src)) return true;
+    // Small image inside a card-header, stat-widget, nav, topbar, or sidebar
+    // where sibling/parent visible text already carries the semantic meaning
+    const decorativeContainer = img.closest(
+      'nav, [class*="sidebar"], [class*="navbar"], [class*="topbar"], [class*="appbar"],' +
+      '[class*="card-header"], [class*="card-icon"], [class*="stat"], [class*="widget-header"],' +
+      '[class*="menu-item"], [class*="nav-item"], [class*="breadcrumb"]'
+    );
+    if (decorativeContainer) {
+      // Icon is alongside text — it's decorative in this context
+      const parent = img.parentElement;
+      if (parent) {
+        const hasNearbyText = parent.innerText && parent.innerText.trim().length > 0;
+        if (hasNearbyText) return true;
+      }
+    }
+    return false;
+  };
+
   for (const img of document.querySelectorAll('img')) {
     if (out.length >= 20) break;
     const src = (img.src || '').slice(0,100);
     const selector = `img[src="${src.slice(0,60)}"]`;
 
-    // 1. Missing alt — only on rendered images (hidden images are irrelevant to screen readers)
+    // 1. Missing alt — only on rendered, non-decorative images.
+    // Icons alongside text labels are decorative — they need alt="" not descriptive alt,
+    // and are filed at low severity with a targeted fix message to avoid false-positive noise.
     if (!img.hasAttribute('alt') && isRendered(img)) {
-      out.push({ issueType:'missingAlt', severity:'medium', selector,
-        description:`img element is missing the alt attribute entirely`, bbox: bb(img) });
+      // Completely skip if aria-hidden or role=presentation (developer already handled it)
+      if (img.getAttribute('aria-hidden') === 'true' || img.getAttribute('role') === 'presentation') {
+        // no issue
+      } else if (isDecorativeIcon(img)) {
+        // Small icon next to visible text — needs alt="" (empty) not descriptive alt
+        out.push({ issueType:'decorativeIconMissingEmptyAlt', severity:'low', selector,
+          description:`Small icon <img> (${Math.round(img.getBoundingClientRect().width)}×${Math.round(img.getBoundingClientRect().height)}px) is missing alt="". Since it appears alongside a visible text label it is decorative — add alt="" or aria-hidden="true" to silence screen readers.`, bbox: bb(img) });
+      } else {
+        // Real content image — needs a meaningful description
+        out.push({ issueType:'missingAlt', severity:'medium', selector,
+          description:`<img> element is missing the alt attribute entirely. Add descriptive alt text so screen-reader users know what the image conveys.`, bbox: bb(img) });
+      }
     }
 
     // 2. Broken image — only flag if the image is actually rendered/visible.

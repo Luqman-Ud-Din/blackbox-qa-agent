@@ -1,18 +1,20 @@
 ---
 name: qa-detect-ux-required-state
 section: visual
-description: "Detects ambiguous required-field state: required field with red border on initial page load (looks like error before user did anything), required-only-marked-by-asterisk (no programmatic indicator), empty required field with error class but no error message text, asterisk without legend."
+description: "Detects ambiguous required-field state: required field with red border on load (looks like error), required indicated only by color with no text or programmatic marker (WCAG 1.4.1), required-only-marked-by-asterisk (no programmatic indicator), error class without message text, asterisk without legend."
 model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasForms, hasRequiredFields]
 ---
 
-## What it catches — 5 issue types
+## What it catches — 6 issue types
 
 | issueType | severity | What |
 |---|---|---|
-| `requiredFieldErrorOnLoad` | high | Required field has red/error border styling on page load while value is empty AND user has not interacted — looks broken before any action (your Session* field in Fee Navigator) |
+| `requiredFieldErrorOnLoad` | high | Required field (`required`/`aria-required`) has red border on page load while empty — looks like a validation error before user has done anything |
+| `requiredByColorOnly` | high | Field uses red border as the **sole** required indicator — no `*`, no `required` attr, no `aria-required` (WCAG 1.4.1 — color must not be the only means of conveying information). Exactly what the Issue Budget "Title" field does. |
 | `requiredMarkerOnlyAsterisk` | medium | Field labeled with `*` but has no `required` attribute, no `aria-required="true"` — assistive tech can't detect it as required |
 | `requiredAsteriskNoLegend` | low | Page has fields marked with `*` but no visible legend ("Required field", "* indicates required") explaining the convention |
 | `errorClassNoErrorMessage` | medium | Field has class matching `error`/`invalid`/`ng-invalid` styling but no visible error message text near it — ambiguous (is something wrong? what?) |
@@ -95,7 +97,53 @@ viewportSensitive: false
     }
   }
 
-  // ── 2. Asterisk-only required (no required attribute) ──────────────
+  // ── 2. Required by color only (WCAG 1.4.1) ──────────────────────────
+  // Field has reddish border on load but NO required attr and NO aria-required.
+  // Color is the sole required indicator — invisible to colorblind users and screen readers.
+  // Note: both requiredByColorOnly (high) and requiredMarkerOnlyAsterisk (medium) may fire on the
+  // same element when a framework like Angular Material auto-injects * into the label DOM.
+  // The dedup layer (cross_family_at_same_element=true) merges them and surfaces requiredByColorOnly
+  // as winner (higher severity). No asterisk exclusion here.
+  let colorOnlyFlagged = 0;
+  const candidateInputs = [...document.querySelectorAll('input, select, textarea')].filter(visible);
+  for (const inp of candidateInputs) {
+    if (colorOnlyFlagged >= 5) break;
+    if (inp.type === 'hidden' || inp.disabled || inp.readOnly) continue;
+    // Skip fields that already have a programmatic required marker — they belong to check 1
+    if (inp.hasAttribute('required') || inp.getAttribute('aria-required') === 'true') continue;
+    const value = (inp.value || '').trim();
+    if (value.length > 0) continue;
+    const cls = (inp.className || '').toString();
+    if (/\bng-touched\b|\btouched\b|\bdirty\b/.test(cls)) continue;
+
+    // Check reddish border on the input itself
+    const cs = getComputedStyle(inp);
+    let borderRGB = parseRGB(cs.borderTopColor) || parseRGB(cs.borderBottomColor)
+                  || parseRGB(cs.borderLeftColor) || parseRGB(cs.borderRightColor)
+                  || parseRGB(cs.outlineColor);
+
+    // Also check Angular Material / Bootstrap / generic component containers
+    if (!isReddishBorder(borderRGB)) {
+      const ctr = inp.closest('mat-form-field, .mat-mdc-form-field, .mat-form-field-wrapper, .form-group, .form-field, .field');
+      if (ctr) {
+        const ccs = getComputedStyle(ctr);
+        borderRGB = parseRGB(ccs.borderTopColor) || parseRGB(ccs.borderLeftColor)
+                  || parseRGB(ccs.outlineColor) || parseRGB(ccs.borderColor);
+      }
+    }
+    if (!isReddishBorder(borderRGB)) continue;
+
+    colorOnlyFlagged++;
+    out.push({
+      issueType: 'requiredByColorOnly',
+      severity: 'high',
+      selector: sel(inp),
+      bbox: bb(inp),
+      description: `Field appears required via red border (rgb ${borderRGB.r},${borderRGB.g},${borderRGB.b}) but has no required attribute, no aria-required="true", and no asterisk in its label — color is the sole required indicator (WCAG 1.4.1 violation). Add a visible * to the label AND set required/aria-required="true" so colorblind users and screen readers know this field is mandatory.`
+    });
+  }
+
+  // ── 3. Asterisk-only required (no required attribute) ──────────────
   let asteriskOnlyFlagged = 0;
   const labels = document.querySelectorAll('label');
   for (const lbl of labels) {
@@ -124,7 +172,7 @@ viewportSensitive: false
     }
   }
 
-  // ── 3. Asterisks present without explanatory legend ─────────────────
+  // ── 4. Asterisks present without explanatory legend ─────────────────
   const asteriskCount = [...labels].filter(l => visible(l) && /\*/.test((l.innerText || '').trim())).length;
   if (asteriskCount >= 2) {
     // Look for an explanatory note
@@ -139,7 +187,7 @@ viewportSensitive: false
     }
   }
 
-  // ── 4. Error class but no error message text ────────────────────────
+  // ── 5. Error class but no error message text ────────────────────────
   let noMsgFlagged = 0;
   const errorFields = document.querySelectorAll('.ng-invalid.ng-touched, .invalid, .error, [aria-invalid="true"], .mat-form-field-invalid');
   for (const ef of errorFields) {
@@ -158,7 +206,7 @@ viewportSensitive: false
     });
   }
 
-  // ── 5. Error border but no aria-invalid ─────────────────────────────
+  // ── 6. Error border but no aria-invalid ─────────────────────────────
   let noAriaFlagged = 0;
   const allInputs = document.querySelectorAll('input, select, textarea');
   for (const inp of allInputs) {
@@ -185,7 +233,7 @@ viewportSensitive: false
 
 ## Notes
 
-- Bounded: 3 error-on-load + 3 asterisk-only + 1 legend + 3 no-msg + 3 no-aria = max ~13
-- Self-skips: page with no required fields / no asterisks returns []
-- The `requiredFieldErrorOnLoad` catches your Session* dropdown in Fee Navigator (red border on empty initial load)
-- The `errorClassNoErrorMessage` catches forms where red appears but no explanation
+- Bounded: 3 error-on-load + 5 color-only + 3 asterisk-only + 1 legend + 3 no-msg + 3 no-aria = max ~18
+- Self-skips: page with no inputs / no reddish borders / no asterisks returns []
+- `requiredByColorOnly` and `requiredMarkerOnlyAsterisk` may both fire on the same element (e.g. Angular Material auto-injects `*` into labels via `mat-mdc-form-field-required-marker`). The dedup layer (`cross_family_at_same_element=true`) merges them and surfaces `requiredByColorOnly` (high) as winner
+- `requiredFieldErrorOnLoad` fires when field HAS `required` attr + red border on load (pre-submit error styling); `requiredByColorOnly` fires when NO `required` attr at all (color is the complete indicator)

@@ -78,6 +78,41 @@ viewportSensitive: true
     }
   }
 
+  // Also check page-header / breadcrumb action buttons against stat cards / content panels below.
+  // Pattern: "Refresh Sync" button in the page header overlaps the "ORPHAN STUDENTS" card.
+  // Caused by insufficient header bottom-padding, card top-margin, or absolute-positioned buttons.
+  if (overlapFlagged < 3) {
+    const headerBtns = [...document.querySelectorAll(
+      'header button, [class*="page-header"] button, [class*="page-title"] button, ' +
+      '[class*="breadcrumb"] button, [class*="title-bar"] button, [class*="topbar"] button, ' +
+      '.page-header [role="button"], [class*="header-right"] button, [class*="header-action"] button'
+    )].filter(visible);
+    const cards = [...document.querySelectorAll(
+      '[class*="card"], [class*="stat-card"], [class*="overview-card"], [class*="kpi"], ' +
+      '[class*="metric"], [class*="widget-card"], [class*="summary-card"], [class*="count-card"]'
+    )].filter(visible);
+    for (const btn of headerBtns) {
+      if (overlapFlagged >= 3) break;
+      const br = btn.getBoundingClientRect();
+      for (const card of cards) {
+        const cr = card.getBoundingClientRect();
+        // Card must be BELOW the button (not the button's own container)
+        if (btn.closest('[class*="card"]') === card) continue;
+        if (cr.top < br.top) continue;
+        const i = intersect(br, cr);
+        if (i && i.area > 30) {
+          overlapFlagged++;
+          out.push({
+            issueType: 'elementsOverlapping', severity: 'high',
+            selector: sel(btn), bbox: bb(btn),
+            description: `Page header button "${(btn.innerText || btn.getAttribute('aria-label') || '').trim().slice(0, 30)}" overlaps card/panel below it by ${i.w.toFixed(0)}×${i.h.toFixed(0)}px. Button appears "attached" to the card. Fix: increase header bottom-padding or card top-margin, or constrain button height.`
+          });
+          break;
+        }
+      }
+    }
+  }
+
   // Also check floating action elements (FAB, sticky-action) against main content
   if (overlapFlagged < 3) {
     const floats = [...document.querySelectorAll('.fab, .floating-button, [class*="floating"], [class*="fab"], [class*="action-button"]')].filter(visible);
@@ -206,7 +241,7 @@ viewportSensitive: true
 
 ## Notes
 
-- Bounded: 3 toolbar/float overlap + 3 text collision + 1 grid crash + 2 sticky + 1 dialog = max ~10
+- Bounded: 3 toolbar/header overlap + 3 text collision + 1 grid crash + 2 sticky + 1 dialog = max ~10
 - Self-skips: page with no toolbars/tables/grids/dialogs returns []
-- The `elementsOverlapping` catches your Students page toolbar buttons sitting on the table header
+- The `elementsOverlapping` catches toolbar vs table headers, FAB vs content, AND header buttons vs stat cards
 - The `gridCellContentCrashed` catches your calendar widget where columns are < 30px

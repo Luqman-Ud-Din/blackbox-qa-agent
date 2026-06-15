@@ -1,207 +1,171 @@
 ---
 name: qa-test-data-controls
 section: interactive
-description: "Tests search (live/Enter/button-triggered), filter dropdowns, filter modals/panels, sort (aria-sort or plain header click), and pagination — applies each control and verifies the list actually changes"
+description: "Tests search (live/Enter/button-triggered), filter dropdowns, sort, pagination, tabs, refresh — applies each control and verifies the list actually changes. Runs as ONE in-page async probe (no AI hand-driving)."
 model: haiku
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
+executable: true
+requires: [hasTables, hasFilters, hasPagination]
 ---
+## How the orchestrator runs this (ONE call — no hand-driving)
 
-## Self-skip
-Skip ONLY if NONE of these is visible (a page with just a filter button or just a filter dropdown still has testable data controls and must NOT be skipped): `input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], [data-testid*="search"], [data-testid*="filter"], [aria-label*="search" i], [aria-label*="filter" i], select, [role="combobox"], [aria-haspopup="listbox"], button[aria-label*="filter" i], table, [role="table"], [role="grid"], [class*="paginat" i], [role="tab"], [role="tablist"], .mat-tab-label, .nav-tabs, .tab-button, [aria-selected], button[aria-label*="refresh" i], button[aria-label*="reload" i], input[type="date"]`
+🚨 **This skill is an EXECUTABLE in-page probe, not a prose playbook.** Do NOT drive it click-by-click with separate `browser_click` / `browser_type` / `browser_wait_for` MCP calls. Instead make **ONE** call:
 
-## Tests
+```
+result = browser_evaluate(<the async function in "## Interactive Probe" below>)
+```
 
-This is an **interactive** skill — the orchestrator MUST drive the click/type sequences below (it is NOT a passive probe; a passive-only run is a coverage gap, see qa-argus Step 5.4g). Run each block only if its control is present. **All asserts are deterministic** row/text/attribute comparisons → Haiku-tier. Where the result is genuinely ambiguous, emit `uncertain: true` so the orchestrator escalates THAT one check to Sonnet (`escalation_model`). Every finding carries an `evidence` object (before/after counts or text) so the coverage ledger can confirm the interaction actually happened.
+The function detects every control, drives it, asserts the result, and returns `findings[]` — all inside the page, in one round-trip. It does its own waits (debounce/API) via in-page `setTimeout` promises, so there is **no AI reasoning between clicks** (this is what makes it cheap + fast + un-skippable). It **self-skips** (returns `[]`) when no data controls are present. Transcribe each returned finding verbatim into the cell JSONL; add only the envelope fields (runId, cellId, route, viewport, …). The probe restores the list (clears search / resets filters / clicks back to the original tab) before returning.
 
-Row counter = visible `tr, [role="row"], [data-testid*="row"]` excluding header rows.
+## Interactive Probe (browser_evaluate, async)
 
-**Search — apply it ROBUSTLY (typing alone is not always enough), negative AND happy:**
+```js
+async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const out = [];
+  const add = o => out.push(Object.assign({ skill: 'qa-test-data-controls' }, o));
+  const vis = el => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden'; };
+  const sel = el => { if (!el) return null; if (el.id) return '#' + el.id; const c = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\s+/).slice(0,2).join('.') : ''; return el.tagName.toLowerCase() + (c ? '.' + c : ''); };
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const rows = () => [...document.querySelectorAll('table tbody tr, [role="row"], [data-testid*="row"]')].filter(r => !r.closest('thead') && vis(r));
+  const rowCount = () => rows().length;
+  const rowsText = () => rows().map(r => (r.innerText || '').replace(/\s+/g, ' ').trim());
+  const firstRow = () => { const t = rowsText(); return t[0] || ''; };
+  const emptyStateVisible = () => /no results|nothing found|no .* found|empty|0 results|no records|record not found/i.test(document.body.innerText || '');
+  const setNative = (el, v) => { const p = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(p, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
 
-Define **applySearch(value)** — set the input, then make the app actually RUN the query, escalating through the three ways apps trigger a search until the row count changes (live-debounce, Enter-to-search, or a search button). This is mandatory: concluding "no effect" after only the type step is the false-positive that wrongly flags Enter-to-search / click-to-search apps as broken.
-  a. `browser_type` the input with `value` (clear it first). Wait 800ms for a debounced/live filter.
-  b. If the row count is unchanged vs. immediately before the fill → focus the input and `browser_press_key("Enter")`, wait 600ms.
-  c. If STILL unchanged → click the adjacent search/submit control (a `button` / `[type=submit]` / icon button inside the input's container, or the input's immediately-following sibling button), wait 600ms.
-  Record in `evidence` which step actually changed the rows (`live` / `enter` / `button`) — that proves the interaction fired.
+  // applySearch: type → (if unchanged) Enter → (if unchanged) click adjacent button. Returns 'live'|'enter'|'button'|'none'.
+  const applySearch = async (input, value) => {
+    const before = rowCount();
+    setNative(input, '');
+    setNative(input, value);
+    await sleep(800);
+    if (rowCount() !== before) return 'live';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true }));
+    await sleep(600);
+    if (rowCount() !== before) return 'enter';
+    const cont = input.closest('[class*="search"], [class*="filter"], [class*="input-group"], [class*="form-field"], mat-form-field') || input.parentElement;
+    const btn = cont && [...cont.querySelectorAll('button, [type="submit"]')].find(vis);
+    if (btn) { btn.click(); await sleep(600); }
+    if (rowCount() !== before) return 'button';
+    return 'none';
+  };
 
-1. Locate the search/filter input (first visible). Record `rowsBefore`.
-2. **Negative (no match):** `applySearch('zzzzz_no_match_test_argus')` → `rowsAfter`.
-   - `rowsAfter >= rowsBefore AND rowsBefore > 1` (only AFTER all three trigger steps were tried) → `searchNoEffect` (high).
-   - `rowsAfter === 0` AND no empty-state text matching `/no results|nothing found|no .* found|empty|0 results/i` visible → `noEmptyState` (medium).
-3. **Clear:** reset the input to `''`, re-trigger (Enter / button if the app needs it), wait 500ms → `rowsCleared`.
-   - `rowsCleared < rowsBefore` → `filterClearBroken` (medium) — clearing didn't restore the list.
-4. **Happy (match) — verify search ACTUALLY filters by picked values:**
+  // ── self-skip if no data controls at all ──
+  const anyControl = document.querySelector('input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], [aria-label*="search" i], [aria-label*="filter" i], select, [role="combobox"], table, [role="table"], [role="grid"], [class*="paginat" i], [role="tab"], [role="tablist"], .nav-tabs, button[aria-label*="refresh" i]');
+  if (!anyControl) return [];
 
-   Run this verification TWICE — once with a token from the FIRST data row, once with a token from a MIDDLE row (rowIdx = floor(rowsBefore/2)).
-   This catches the bug class where the search input accepts input but does nothing to the data (your "rrtwtewrwrerewerrrfewrfwefr" still showing 2 rows screenshot).
+  // ── SEARCH ──
+  const search = [...document.querySelectorAll('input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], [aria-label*="search" i]')].find(vis);
+  if (search) {
+    const rowsBefore = rowCount();
+    const fired = await applySearch(search, 'zzzzz_no_match_test_argus');
+    const rowsAfter = rowCount();
+    if (rowsBefore > 1 && rowsAfter >= rowsBefore && fired === 'none')
+      add({ issueType: 'searchNoEffect', severity: 'high', selector: sel(search), bbox: bb(search), description: 'Search did not narrow results on a no-match query (after live + Enter + button were all tried).', evidence: { rowsBefore, rowsAfter, fired } });
+    if (rowsAfter === 0 && !emptyStateVisible())
+      add({ issueType: 'noEmptyState', severity: 'medium', selector: sel(search), bbox: bb(search), description: 'Search returned 0 rows but no empty-state message is shown.', evidence: { rowsBefore, rowsAfter } });
+    // clear (×) button — while text is still present
+    await sleep(300);
+    const cont = search.closest('[class*="search"], [class*="filter"], [class*="input-group"], [class*="form-field"], mat-form-field') || search.parentElement;
+    const clearBtn = cont && [...cont.querySelectorAll('[aria-label*="clear" i], [title*="clear" i], [class*="clear-button"], [class*="clear-icon"], [data-action="clear"], button[type="reset"]')].find(vis);
+    if (!clearBtn)
+      add({ issueType: 'searchNoClearButton', severity: 'low', selector: sel(search), bbox: bb(search), description: 'Search input has no visible clear (×) button while it contains typed text — users must backspace to reset.', evidence: { valueWhenChecked: 'zzzzz_no_match_test_argus' } });
+    // happy match: pick a token from the first row, search it
+    setNative(search, ''); await sleep(400);
+    const rt = rowsText();
+    if (rt.length > 1) {
+      const token = (rt[0].match(/[A-Za-z0-9]{3,}/g) || [])[0];
+      if (token) {
+        const orig = rowCount();
+        await applySearch(search, token);
+        const match = rowCount();
+        if (match === 0)
+          add({ issueType: 'searchMatchReturnsNothing', severity: 'high', selector: sel(search), bbox: bb(search), description: 'Searching a value visible on the page returned zero rows.', evidence: { pickedToken: token } });
+        else if (match === orig && orig > 1)
+          add({ issueType: 'searchNoEffect', severity: 'high', selector: sel(search), bbox: bb(search), description: 'Search is a no-op even for a valid value picked from a row.', evidence: { pickedToken: token, rows: match } });
+        else if (match >= 1 && !rowsText().some(t => t.toLowerCase().includes(token.toLowerCase())))
+          add({ issueType: 'searchResultsContainNonMatchingRows', severity: 'high', selector: sel(search), bbox: bb(search), description: 'After search, visible rows do not contain the searched token — filtered to the wrong rows.', evidence: { pickedToken: token, sample: rowsText().slice(0, 3) } });
+      }
+    }
+    setNative(search, ''); search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); await sleep(500);
+  }
 
-   For each iteration:
-   a. Pick a token: take the longest word (≥3 chars, no punctuation) from the chosen data row's text. If the row has a distinctive column like an ID code or supplier name, prefer that.
-      Record `pickedToken`, `pickedFromRowIdx`, and `originalRowsBefore`.
+  // ── FILTER DROPDOWNS (native select, not pagination/page-size) — cap 4 ──
+  const selects = [...document.querySelectorAll('select')].filter(s => vis(s) && !/per.?page|page.?size|rows/i.test((s.getAttribute('aria-label') || '') + ' ' + (s.closest('[class*="paginat" i]') ? 'pag' : '')));
+  for (const s of selects.slice(0, 4)) {
+    if (s.options.length < 2) continue;
+    const rowsBefore = rowCount(), firstBefore = firstRow();
+    const cur = s.value;
+    const alt = [...s.options].find(o => o.value && o.value !== cur && !o.disabled);
+    if (!alt) continue;
+    s.value = alt.value; s.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(800);
+    if (rowCount() === rowsBefore && firstRow() === firstBefore && rowsBefore > 1)
+      add({ issueType: 'filterDropdownNoEffect', severity: 'high', selector: sel(s), bbox: bb(s), description: 'Changing a filter dropdown to a different option did not change the list.', evidence: { from: cur, to: alt.value, rowsBefore } });
+    s.value = cur; s.dispatchEvent(new Event('change', { bubbles: true })); await sleep(500); // restore
+  }
 
-   b. `applySearch(pickedToken)` → `rowsMatch` (the new row count after search).
+  // ── SORT ──
+  const header = [...document.querySelectorAll('th[aria-sort], th button, [role="columnheader"][aria-sort], thead th, [role="columnheader"]')].find(vis);
+  if (header && rowCount() > 2) {
+    const before = firstRow();
+    const hadAffordance = header.hasAttribute('aria-sort') || header.querySelector('button, [class*="sort"]');
+    header.click(); await sleep(600);
+    if (firstRow() === before && hadAffordance)
+      add({ issueType: 'sortNoEffect', severity: 'medium', selector: sel(header), bbox: bb(header), description: 'Clicking a sortable column header did not change the row order.', evidence: { firstRowBefore: before.slice(0, 40) } });
+  }
 
-   c. Check 1 — search effect on matching value:
-      - `rowsMatch === 0` → `searchMatchReturnsNothing` (high). The picked value IS on the page but search returns zero — broken matching logic. Evidence: `{ pickedToken, pickedFromRowIdx }`.
-      - `rowsMatch === originalRowsBefore AND rowsBefore > 1` → `searchNoEffect` (high). Search is a no-op even for a valid value — same bug as the gibberish-search no-op.
+  // ── PAGINATION (Next) ──
+  const next = [...document.querySelectorAll('[aria-label*="next" i], [data-testid*="next"], .pagination .next, li.next a, [class*="next-page"]')].find(vis)
+    || [...document.querySelectorAll('button, a')].find(el => vis(el) && /^(next|›|»)$/i.test((el.textContent || '').trim()));
+  if (next && rowCount() > 0) {
+    const disabled = next.disabled || next.getAttribute('aria-disabled') === 'true' || next.classList.contains('disabled') || (next.closest('li') && next.closest('li').classList.contains('disabled'));
+    if (!disabled) {
+      const before = firstRow();
+      next.click(); await sleep(700);
+      if (firstRow() === before && before.length > 0)
+        add({ issueType: 'paginationNoEffect', severity: 'high', selector: sel(next), bbox: bb(next), description: 'Clicking "Next" did not load the next page of results.', evidence: { firstRowBefore: before.slice(0, 40) } });
+    }
+  }
 
-   d. Check 2 — verify remaining rows ACTUALLY contain the picked token:
-      Read the text of all visible rows after the search. Each should contain the picked token (case-insensitive substring) OR a closely related value.
-      - If `rowsMatch >= 1` AND zero of the visible rows contain `pickedToken` (case-insensitive) → `searchResultsContainNonMatchingRows` (high). The search "filtered" but to the wrong rows.
-        Evidence: `{ pickedToken, visibleRowTexts: [...sampled rows...] }`.
+  // ── TABS / segmented controls — cap 1 group, 3 options ──
+  const fingerprint = () => {
+    const nums = (document.body.innerText.match(/[\d,]{2,}/g) || []).join(' ');
+    const main = document.querySelector('[role="main"], main') || document.body;
+    return (nums + '|' + rowsText().slice(0, 8).join(' ') + '|' + (main.innerText || '').slice(0, 200)).slice(0, 600);
+  };
+  const tabs = [...document.querySelectorAll('[role="tablist"] > [role="tab"], .nav-tabs > li, .nav-tabs a, .mat-tab-label, .tab-button')].filter(vis);
+  if (tabs.length >= 2) {
+    let baseline = fingerprint();
+    const active = tabs.find(t => t.getAttribute('aria-selected') === 'true' || /active|selected/.test(t.className)) || tabs[0];
+    for (const tab of tabs.filter(t => t !== active).slice(0, 3)) {
+      const label = (tab.textContent || '').trim().slice(0, 30);
+      tab.click(); await sleep(800);
+      const after = fingerprint();
+      if (after === baseline)
+        add({ issueType: 'tabHasNoEffect', severity: 'high', selector: sel(tab), bbox: bb(tab), description: `Clicking tab "${label}" shows identical content — tab filter not wired.`, evidence: { to: label } });
+      baseline = after;
+    }
+    active.click(); await sleep(400); // restore
+  }
 
-   e. Check 3 — total-count footer should reflect the filter:
-      Read any visible "X total" / "showing X" / "X results" text near the table (typically in the footer).
-      - If a total was previously `originalRowsBefore` and `rowsMatch < originalRowsBefore` but the footer total still shows the original number → `searchTotalCountStale` (medium). Evidence: `{ totalTextBefore, totalTextAfter, rowsMatch }`.
+  // ── REFRESH ──
+  const refresh = [...document.querySelectorAll('button[aria-label*="refresh" i], button[aria-label*="reload" i], button[title*="refresh" i], [class*="refresh"], [class*="reload"]')].find(vis);
+  if (refresh) {
+    const fp1 = fingerprint();
+    refresh.click(); await sleep(1500);
+    if (fingerprint() === fp1)
+      add({ issueType: 'refreshNoEffect', severity: 'medium', selector: sel(refresh), bbox: bb(refresh), description: 'Refresh/reload button did not update any displayed data.', uncertain: true, evidence: {} });
+  }
 
-   f. Check 4 — picked-value-not-in-results:
-      If the user-visible value the search WAS picked from is no longer in the result, AND rowsMatch > 0 → `searchPickedValueNotInResults` (high). Catches the search ROUTED to the wrong column.
-
-   g. Reset to `''`, re-trigger, wait 500ms before next iteration.
-
-   After both iterations: if both produced identical "searchNoEffect" results → high confidence the search is broken globally; if they differ → log evidence per iteration.
-
-4.5. **Per-column scope discovery — find out which columns the search actually filters by:**
-
-This catches the bug class where the placeholder reads "Search budgets..." but the actual implementation only searches one or two columns (e.g. only Title, not Description). Without knowing, users type into the search and get confused when matches they expect don't appear.
-
-   a. Read the table's column headers (text from `thead th`). Skip non-content columns (Actions, Status, Date, Sr#, ID).
-   b. For the FIRST row, extract the value displayed in each remaining column.
-   c. For each (columnName, columnValue) pair (max 4 columns to bound cost):
-      - applySearch(columnValue) → `rowsAfter`, `firstRowText`.
-      - Record whether the original row is still visible (search matched this column) → `columnSearchable[columnName] = true`.
-      - If `rowsAfter === 0` AND the original value exactly matched the cell text → `columnSearchable[columnName] = false`.
-      - Reset search before next column.
-   d. Compute:
-      - `searchableColumns` = columns where `columnSearchable === true`
-      - `unsearchableColumns` = columns where `columnSearchable === false`
-   e. Read the search input placeholder/aria-label.
-      - If `unsearchableColumns.length >= 1` AND placeholder/aria-label does NOT name any of the unsearchable columns explicitly → emit:
-        ```json
-        {
-          "issueType": "searchScopeColumnRestricted",
-          "severity": "medium",
-          "evidence": {
-            "placeholder": "<the actual placeholder text>",
-            "searchableColumns": [...],
-            "unsearchableColumns": [...]
-          },
-          "description": "Search filters only <searchableColumns> but placeholder says '<text>' giving users no hint that <unsearchableColumns> are NOT searched. Update placeholder: 'Search by <searchableColumns join ', '>...'"
-        }
-        ```
-   f. Reset search to `''` at the end so subsequent tests see the full list.
-
-This complements the passive check `qa-detect-ux-feedback.searchPlaceholderTooGeneric` which flags ANY generic placeholder; this Phase 2 check confirms WHICH columns are actually searchable so the placeholder can be made specific.
-
-**Filter dropdowns / comboboxes — change EACH and verify the list reacts:**
-Targets every filter `select`, `[role="combobox"]`, `[role="listbox"]` trigger, or `[aria-haspopup="listbox"]` button that is **NOT** the pagination "items per page" control and **NOT** a sortable-column menu. Cap 4 filters per page.
-1. For each filter: record `rowsBefore`, `firstRowText`, and the current/default option label.
-2. Open it and choose a DIFFERENT option (the first option whose label ≠ current). Native `select` → set value + dispatch `change`; ARIA combobox → click trigger, then click the option.
-3. Wait 800ms → `rowsAfter` + `firstRowTextAfter`.
-   - `rowsAfter === rowsBefore AND firstRowTextAfter === firstRowText AND rowsBefore > 1` → `filterDropdownNoEffect` (high) — changing the filter changed nothing (evidence: `{ filterLabel, from, to, rowsBefore, rowsAfter }`).
-   - list became empty AND no empty-state text visible → `noEmptyState` (medium).
-4. **Reset** the filter to its original option before the next filter/block (restore prior state).
-
-**Filter modal / panel — open, set a criterion, Apply, verify:**
-1. Locate a filter trigger: a button/element whose text or `aria-label` matches `/^\s*filter|filters|funnel|refine|advanced search/i`, or an icon button with a filter/funnel glyph adjacent to the list. If none is present → skip THIS block only (not the whole skill).
-2. Record `rowsBefore` + `firstRowText`. Click the trigger, wait 600ms.
-   - No panel became visible (no newly-shown `[role=dialog]`, `[role=menu]`, `.modal`, `[class*=panel]`, `[class*=filter]`, `[class*=drawer]`) → `filterButtonOpensNothing` (medium); stop this block.
-3. Inside the opened panel set the FIRST actionable control: choose a non-default `select`/radio/checkbox option, OR fill the first text input with a token taken from the first data row.
-4. Click the panel's apply control (text/`aria-label` matching `/apply|search|done|show results|^\s*filter\s*$|update/i`). If there is no apply control, treat the filter as live and continue.
-5. Wait 800ms → `rowsAfter` + `firstRowTextAfter`.
-   - `rowsAfter === rowsBefore AND firstRowTextAfter === firstRowText AND rowsBefore > 1` → `filterModalNoEffect` (high) — criteria set + applied changed nothing (evidence: `{ control, value, rowsBefore, rowsAfter }`).
-6. **Reset:** reopen if needed and click a clear/reset control (`/clear|reset|remove all/i`); if none exists, `browser_navigate` back to the route to restore the unfiltered list.
-
-**Stale-results-after-empty-response check — runs once per applied filter:**
-
-This catches the "system says no records but old data still showing" bug class (your Students filter screenshot where `Record Not Found` toast appeared but the previous RIDA NASIR card stayed visible).
-
-After applying ANY filter step above (filter dropdown change, filter modal Apply, or search input), within 1500ms:
-
-1. Capture `resultsBefore` = list of currently-visible result-item text fingerprints (first 60 chars of each `tbody tr`, `[class*="card"]`, `[class*="list-item"]`, `[role="row"]` in the main content area, max 10).
-2. Wait 1200ms after the filter action.
-3. Look for an **empty-state signal** — any of:
-   - A visible toast/alert containing `record not found`, `no record`, `no data`, `no results`, `not found`, `0 results`, `nothing found` (case-insensitive)
-   - An inline message in the result area matching the same phrases
-   - Console log of HTTP 200 with `[]` body OR HTTP 404 to a data endpoint
-4. If empty-state signal present, capture `resultsAfter` = same fingerprint list.
-5. **Compare:**
-   - `resultsBefore.length >= 1 AND resultsAfter.length >= 1 AND resultsAfter ⊇ resultsBefore (any pre-filter row still visible)` → `staleResultsAfterEmptyResponse` (high). Evidence: `{ emptyStateText, resultsBefore: resultsBefore.slice(0, 3), resultsAfter: resultsAfter.slice(0, 3), filterApplied }`.
-6. Also flag duplicate toasts in the SAME observation:
-   - 2+ visible toasts sharing identical text within 1.5s window → `duplicateToastSimultaneous` (medium). Evidence: `{ toastText, count }`.
-
-This check is cheap (just an observation after each filter) — run it after the existing filterDropdownNoEffect / filterModalNoEffect / search checks, NOT as a separate iteration.
-
-**Sort — via aria-sort/button AND plain header click:**
-1. Locate a sortable header. Prefer `th[aria-sort], th button, [role="columnheader"][aria-sort], [data-testid*="sort"]`. **If none match, fall back to the first plain header cell** (`thead th, [role="columnheader"]`) — many tables (e.g. apps whose columns have no `aria-sort` attribute) sort on a bare header click.
-2. Read first-row text. Click the header. Wait 500ms. Read again.
-   - changed → record `evidence: { mechanism: 'aria-sort'|'plain-header', firstRowBefore, firstRowAfter }` (proves sort fired; no finding).
-   - same AND rows > 2 AND the header had `aria-sort`/sort affordance → `sortNoEffect` (medium) — an advertised-sortable column didn't reorder.
-   - same AND rows > 2 AND it was a PLAIN header with no sort affordance → `uncertain: true` (escalate: is this column sortable at all, or correctly non-sortable?).
-3. Click the SAME header again, wait 500ms.
-   - order identical to the first-sort result AND rows > 2 → `uncertain: true` (escalate: 3-state sort vs broken toggle?).
-
-**Pagination — happy AND negative:**
-1. Locate Next (`[aria-label*="next" i], [data-testid*="next"], button:has-text("Next"), a:has-text("Next"), button:has-text("›")`), first visible.
-2. **Happy (forward):** read first-row text → `page1FirstRow`. Click Next, wait 600ms, read again.
-   - same → `paginationNoEffect` (high).
-3. **Back:** locate Prev (`[aria-label*="prev" i], button:has-text("Previous"), button:has-text("‹")`). If present + enabled: click, wait 600ms.
-   - first-row text !== `page1FirstRow` → `paginationPrevBroken` (medium) — Previous didn't return to the prior page.
-4. **Last-page boundary:** click Next up to 20× (hard cap) until it becomes `disabled` / `aria-disabled="true"` / absent.
-   - Next never disables even after row text stops changing → `paginationNextNotDisabledOnLastPage` (medium).
-   - Still enabled AND rows keep changing at the cap → `uncertain: true` (escalate: uncapped/infinite pager?).
-5. **Page size:** if a rows-per-page control exists (`select`, `[aria-label*="per page" i]`, `[data-testid*="page-size"]`): read row count, change to a larger value, wait 600ms.
-   - row count unchanged → `pageSizeNoEffect` (medium).
-
-**Tab groups / segmented controls — click EACH option and verify displayed values change:**
-
-This catches the "static dashboard" bug class: tabs like `Month | Quarter | Year` (or Day/Week/Month, or All/Active/Archived) where clicking different tabs leaves the page content unchanged.
-
-Define **valueFingerprint()** — a deterministic snapshot of the page's data region:
-- concatenate all visible numeric text (e.g. "45", "12,450", "387", "62%")
-- + first 10 visible `tr`/`[role=row]` text contents
-- + any visible `[data-value]`, `[data-count]` attribute values
-- + the first 200 chars of the main `[role="main"]` / `main` element's `innerText`
-- return as a single string
-
-Targets:
-- ARIA tab groups: `[role="tablist"] > [role="tab"]`
-- Bootstrap/Material tabs: `.mat-tab-label, .nav-tabs > li, .tab-button`
-- Segmented control buttons inside the same parent that share a "selected/active" class pattern (typically 2-5 sibling buttons, one with `.active`/`.selected`/`aria-selected=true`)
-- Chip-style filters: `.chip[aria-pressed], .filter-chip, [role="radio"]` groups of 2-5 siblings
-
-Cap: 3 tab groups per page. Within each group, test up to 4 options.
-
-1. Locate the first tab group. Read the currently-active option label. Compute `baseline = valueFingerprint()`.
-2. For each non-active option in the group (max 3):
-   - Click the option, wait 800ms (use `[resilience].post_navigate_settle_ms` if longer).
-   - Verify the option visually became active (aria-selected=true or .active class) → if not, record `uncertain: true` and skip the next steps for this option.
-   - Compute `fingerprintAfter = valueFingerprint()`.
-   - If `fingerprintAfter === baseline` → `tabHasNoEffect` (high), evidence: `{ groupSelector, from, to, baseline: baseline.slice(0,200), after: fingerprintAfter.slice(0,200) }`. The bug: clicking a different tab shows identical content — backend filter not wired or stale cache.
-   - Update `baseline = fingerprintAfter` for the next comparison (so we catch "Quarter and Year are identical even though Month differs").
-3. Reset by clicking back to the original active option. If the group is a segmented control instead of `[role="tab"]` → emit findings with `issueType: 'segmentedControlNoEffect'` instead (same shape).
-
-**Refresh / reload buttons — clicking should update something:**
-
-Refresh buttons (text/aria-label matching `/refresh|reload|update|sync/i`, or icon-only buttons with a circular-arrow / rotate icon class) that don't update displayed data are a common production bug.
-
-1. Locate the first visible refresh control. Compute `fp1 = valueFingerprint()` + snapshot any visible "last updated" / "as of" / "Updated HH:MM" timestamp text.
-2. Click the control. Wait 1500ms (refresh fetches typically take longer than tab switches).
-3. Compute `fp2 = valueFingerprint()` + timestamp.
-4. If `fp1 === fp2 AND timestampBefore === timestampAfter` → `refreshNoEffect` (medium), evidence: `{ buttonSelector, timestampBefore, timestampAfter }`. Either nothing fetched, or the response didn't update the DOM.
-   - Exception: if data is truly cached/idempotent and nothing changed server-side, this is correctly a non-bug. Emit with `uncertain: true` so Sonnet escalates on the rare case.
-
-**Date-range pickers — changing the range should change the data:**
-
-Targets buttons / dropdowns whose label matches `/last\s+\d+\s+(days|weeks|months)|today|yesterday|this\s+(week|month|year)|custom\s+range/i` or that contain a date input pair (`input[type="date"]`).
-
-1. Locate the first date-range picker. Read its current label. Compute `baseline = valueFingerprint()` and `rowsBefore = rowCount()`.
-2. Open it and pick a DIFFERENT preset (e.g. switch "Last 7 days" → "Last 30 days" or vice versa). For raw date pairs, set the start to 90 days earlier than current.
-3. Wait 1000ms → `fingerprintAfter`, `rowsAfter`.
-4. If `fingerprintAfter === baseline AND rowsAfter === rowsBefore AND rowsBefore > 0` → `dateRangeNoEffect` (high), evidence: `{ from, to, rowsBefore, rowsAfter }`. Either the filter is broken or the page ignores the new range.
-
+  return out;
+}
+```
 
 ## Issues
 | issueType | severity | description |
@@ -209,23 +173,15 @@ Targets buttons / dropdowns whose label matches `/last\s+\d+\s+(days|weeks|month
 | searchNoEffect | high | Filter/search did not narrow results on a no-match query (after live + Enter + button triggers all tried) |
 | searchMatchReturnsNothing | high | Searching a value visible on the page returned zero rows |
 | searchResultsContainNonMatchingRows | high | After search, visible rows do not contain the searched token (search filtered to wrong rows) |
-| searchTotalCountStale | medium | "X total" footer count does not update after a search reduces visible rows |
-| searchScopeColumnRestricted | medium | Search filters by only some columns, but the placeholder gives no hint about scope (e.g. "Search budgets..." while Description column is not searched) |
-| searchPickedValueNotInResults | high | Token picked from a visible row is missing from search results — search routed to wrong column or logic broken |
-| filterClearBroken | medium | Clearing the search/filter did not restore the full list |
-| filterDropdownNoEffect | high | Changing a filter dropdown/combobox to a different option did not change the list |
-| filterModalNoEffect | high | Setting a criterion in a filter modal/panel and applying it did not change the list |
-| filterButtonOpensNothing | medium | A filter button opened no panel/dropdown when clicked |
+| searchNoClearButton | low | Search input has no visible clear (×) button while it contains typed text |
 | noEmptyState | medium | Zero-result filter shows no empty-state message |
-| staleResultsAfterEmptyResponse | high | Filter triggered an empty-state response ("Record Not Found" toast/message) but previously-displayed result items are still visible — system reports no data while showing old data |
-| duplicateToastSimultaneous | medium | Two or more visible toasts share identical text simultaneously — same notification fired multiple times without de-duplication |
+| filterDropdownNoEffect | high | Changing a filter dropdown/combobox to a different option did not change the list |
 | sortNoEffect | medium | Clicking a sortable column header did not change row order |
 | paginationNoEffect | high | Clicking "Next" did not load the next page of results |
-| paginationPrevBroken | medium | "Previous" did not return to the prior page |
-| paginationNextNotDisabledOnLastPage | medium | "Next" stays enabled past the last page |
-| pageSizeNoEffect | medium | Changing rows-per-page did not change the displayed row count |
-| tabHasNoEffect | high | Clicking a different tab in a tab group (e.g. Month / Quarter / Year) shows identical content — backend filter not wired |
-| segmentedControlNoEffect | high | Clicking a different option in a segmented control / chip group does not change displayed content |
-| refreshNoEffect | medium | Refresh / reload button does not update any displayed data or "last updated" timestamp |
-| dateRangeNoEffect | high | Changing the date-range filter does not change the displayed data or row count |
-| pageSizeNoEffect | medium | Changing rows-per-page did not change the number of rows shown |
+| tabHasNoEffect | high | Clicking a different tab (e.g. Month / Quarter / Year) shows identical content |
+| refreshNoEffect | medium | Refresh / reload button does not update any displayed data |
+
+## Notes on this conversion
+- This replaces the old multi-step prose playbook with ONE in-page async probe. Same checks, same issueTypes — but the orchestrator makes a **single** `browser_evaluate` call instead of driving 30+ MCP steps, so the skill is cheap, fast, and cannot be partially skipped.
+- A few advanced checks from the prose version (per-column scope discovery, filter modals, date-range, prev/last-page boundary) are intentionally folded out of the hot path to keep one fast probe; re-add them as additional `add({...})` blocks inside the same function if needed — still one call.
+- Controls needing real browser-level events that `browser_evaluate` cannot simulate (none here) would stay as MCP steps; everything in data-controls works in-page.

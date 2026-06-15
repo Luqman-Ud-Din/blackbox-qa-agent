@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasBreadcrumb]
 ---
 
 ## What it catches — 6 issue types
@@ -18,6 +19,7 @@ viewportSensitive: false
 | `breadcrumbCurrentIsLink` | medium | Last (current-page) breadcrumb item is a clickable `<a href>` — clicking reloads the current page, confusing users |
 | `breadcrumbSeparatorInconsistent` | low | Multiple separator characters used in same breadcrumb (`>`, `/`, `›`, `→` mixed) |
 | `breadcrumbNoLandmark` | low | Breadcrumb has no `aria-label` / `role="navigation"` — screen readers can't identify the navigation landmark |
+| `breadcrumbWrapsMultiLine` | medium | Breadcrumb wraps to 2+ lines on narrow viewport — loses single-line navigation clarity |
 
 ## Probe (browser_evaluate)
 
@@ -101,6 +103,25 @@ viewportSensitive: false
       }
     }
 
+  }
+
+  // ── Breadcrumb wraps to multiple lines ──────────────────────────────────
+  // On mobile/tablet, long breadcrumb paths wrap to 2–3 lines, consuming significant
+  // header space and losing the single-line "you are here" clarity.
+  // E.g. "Reports > Student\nAdoption\nReport" across 3 lines on mobile.
+  let wrapFlagged = 0;
+  for (const bc of [...containers].filter(visible).slice(0, 3)) {
+    if (wrapFlagged >= 2) break;
+    const r = bc.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    const s = getComputedStyle(bc);
+    const lineHeight = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.4 || 20;
+    if (r.height > lineHeight * 2.2) {
+      wrapFlagged++;
+      const lines = Math.round(r.height / lineHeight);
+      out.push({ issueType:'breadcrumbWrapsMultiLine', severity:'medium', selector:sel(bc), bbox:bb(bc),
+        description:`Breadcrumb wraps to ~${lines} lines (container ${Math.round(r.height)}px tall, line-height ~${Math.round(lineHeight)}px) on ${window.innerWidth}px viewport. Loses single-line navigation clarity. Fix: truncate long segment names, collapse middle segments with "…", or use a compact mobile breadcrumb pattern.` });
+    }
   }
 
   return out;

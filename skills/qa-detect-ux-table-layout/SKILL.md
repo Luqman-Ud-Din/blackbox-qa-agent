@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
+requires: [hasTables]
 ---
 
 ## What it catches — 7 issue types

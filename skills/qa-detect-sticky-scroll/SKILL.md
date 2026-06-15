@@ -1,115 +1,97 @@
 ---
 name: qa-detect-sticky-scroll
 section: responsiveness
-description: "Tests sticky elements during scroll: they remain pinned, do not overlap content, and do not detach. Scrolls the page, captures state, restores."
+description: "Tests sticky elements during scroll: they remain pinned, do not overlap content, and do not detach. Scrolls the page, captures state, restores. Runs as ONE in-page async probe (no AI hand-driving)."
 model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: true
 interactive: true
+executable: true
+requires: [hasStickyHeader, hasStickyElements]
 ---
 
-## What it checks
+## How the orchestrator runs this (ONE call — no hand-driving)
 
-Sticky / fixed headers and sidebars commonly break in subtle ways:
-- The sticky header detaches and scrolls away (`position: sticky` broken by an ancestor with `overflow: hidden`)
-- The sticky element overlaps content that has no offset/padding compensation
-- Two sticky elements collide
+🚨 **This skill is an EXECUTABLE in-page probe, not a prose playbook.** Do NOT drive it with separate `browser_evaluate` (scroll) / `browser_wait_for` MCP steps. Instead make **ONE** call:
 
-This skill scrolls the page down, measures sticky behavior, then scrolls back to top.
+```
+result = browser_evaluate(<the async function in "## Interactive Probe" below>)
+```
 
-## Orchestrator flow
+The function records each sticky/fixed element's baseline position, scrolls the page down (via in-page `window.scrollTo`), waits with an in-page `setTimeout` promise, re-measures, asserts pin/detach behavior, scrolls back to the top, and returns `findings[]` — all inside the page, in one round-trip. There is **no AI reasoning between steps**. It **self-skips** (returns `[]`) when the page has no sticky/fixed elements. Transcribe each returned finding verbatim into the cell JSONL; add only the envelope fields (runId, cellId, route, viewport, …). The probe restores scroll position (back to 0) and removes its tracking attributes before returning.
 
-**Step 5 (scroll back to top) is mandatory.**
-
-1. Run `probe.captureScrollAndSticky` — returns `{scrollTop: 0, stickyCount, stickyAtTop: [...]}`. Save baseline. If `stickyCount === 0` → **self-skip**.
-2. `browser_evaluate`: `window.scrollTo({ top: 800, behavior: 'instant' })` (or use `window.scrollBy(0, 800)`)
-3. `browser_wait_for(time=400)`
-4. Run `probe.checkStickyAfterScroll` — measures each baseline sticky element's new position
-5. `browser_evaluate`: `window.scrollTo({ top: 0, behavior: 'instant' })` — RESTORE
-6. `browser_wait_for(time=200)`
-
-## Probes (browser_evaluate)
+## Interactive Probe (browser_evaluate, async)
 
 ```js
-// probe.captureScrollAndSticky
-() => {
-  const sel = el => {
-    const id = el.id ? `#${el.id}` : '';
-    return (el.tagName.toLowerCase() + id).slice(0, 120);
-  };
+async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const out = [];
-  // Find all sticky and fixed elements visible in viewport
+  const add = o => out.push(Object.assign({ skill: 'qa-detect-sticky-scroll' }, o));
+  const sel = el => { if (!el) return null; const id = el.id ? '#' + el.id : ''; return (el.tagName.toLowerCase() + id).slice(0, 120); };
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+
+  // ── capture baseline sticky/fixed elements ──
+  const baseline = [];
   const all = document.querySelectorAll('header, nav, aside, [class*="sticky"], [class*="fixed"], [class*="navbar"]');
-  let stickyCount = 0;
   for (const el of all) {
     const style = getComputedStyle(el);
     if (style.position !== 'sticky' && style.position !== 'fixed') continue;
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
-    stickyCount++;
-    el.setAttribute('data-argus-sticky', String(out.length));
-    out.push({
-      idx: out.length,
-      selector: sel(el),
-      initialTop: Math.round(r.top),
-      initialBottom: Math.round(r.bottom),
-      position: style.position
-    });
-    if (out.length >= 6) break;
+    el.setAttribute('data-argus-sticky', String(baseline.length));
+    baseline.push({ idx: baseline.length, el, selector: sel(el), initialTop: Math.round(r.top), initialBottom: Math.round(r.bottom), position: style.position });
+    if (baseline.length >= 6) break;
   }
-  return {
-    scrollTop: window.scrollY,
-    stickyCount,
-    stickyAtTop: out
-  };
-}
-```
 
-```js
-// probe.checkStickyAfterScroll
-() => {
-  const out = [];
-  const items = document.querySelectorAll('[data-argus-sticky]');
-  const newScrollTop = window.scrollY;
-  for (const el of items) {
+  // ── self-skip if no sticky/fixed elements ──
+  if (baseline.length === 0) {
+    for (const el of document.querySelectorAll('[data-argus-sticky]')) { try { el.removeAttribute('data-argus-sticky'); } catch (_) {} }
+    return [];
+  }
+
+  // page must actually be scrollable for this test to be meaningful
+  const maxScroll = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) - window.innerHeight;
+  if (maxScroll < 50) {
+    for (const el of document.querySelectorAll('[data-argus-sticky]')) { try { el.removeAttribute('data-argus-sticky'); } catch (_) {} }
+    return [];
+  }
+
+  const origScroll = window.scrollY;
+
+  // ── scroll down ──
+  window.scrollTo({ top: Math.min(800, maxScroll), behavior: 'instant' });
+  await sleep(450);
+
+  // ── re-measure each baseline sticky element ──
+  for (const b of baseline) {
+    const el = document.querySelector(`[data-argus-sticky="${b.idx}"]`);
+    if (!el) continue;
     const r = el.getBoundingClientRect();
     const style = getComputedStyle(el);
-    const idx = el.getAttribute('data-argus-sticky');
-    out.push({
-      idx,
-      selector: el.id ? `#${el.id}` : el.tagName.toLowerCase(),
-      newTop: Math.round(r.top),
-      stillVisible: r.bottom > 0 && r.top < window.innerHeight,
-      position: style.position,
-      // A working sticky element should still be at top OR within the viewport (top ≈ 0 for header)
-      detachedFromTop: style.position === 'sticky' && r.top < -2 && !el.closest('[style*="overflow:hidden"]')
-    });
+    const stillVisible = r.bottom > 0 && r.top < window.innerHeight;
+    const detachedFromTop = style.position === 'sticky' && r.top < -2 && !el.closest('[style*="overflow:hidden"]');
+    if (detachedFromTop)
+      add({ issueType: 'stickyDetachedOnScroll', severity: 'high', selector: b.selector, bbox: bb(el), description: `position:sticky element ${b.selector} scrolled off-screen instead of pinning — ancestor probably has overflow:hidden or transform.`, evidence: { initialTop: b.initialTop, newTop: Math.round(r.top) } });
+    if (style.position === 'fixed' && !stillVisible)
+      add({ issueType: 'fixedDetachedOnScroll', severity: 'high', selector: b.selector, bbox: bb(el), description: `position:fixed element ${b.selector} is no longer visible after scroll — likely a transformed ancestor breaking the fixed-positioning context.`, evidence: { initialTop: b.initialTop, newTop: Math.round(r.top) } });
   }
-  return { newScrollTop, stickies: out };
+
+  // ── RESTORE: scroll back + remove tracking attrs ──
+  window.scrollTo({ top: origScroll, behavior: 'instant' });
+  await sleep(200);
+  for (const el of document.querySelectorAll('[data-argus-sticky]')) { try { el.removeAttribute('data-argus-sticky'); } catch (_) {} }
+
+  return out;
 }
 ```
-
-The orchestrator post-processes the `stickies` array:
-
-For each sticky:
-- If `detachedFromTop` is true → emit `stickyDetachedOnScroll` (high) — `position:sticky` element scrolled off when it should have pinned
-- If `position === "fixed"` and `stillVisible` is false → emit `fixedDetachedOnScroll` (high) — fixed element disappeared (likely transformed ancestor breaking it)
-
-```js
-// probe.cleanupSticky
-() => {
-  for (const el of document.querySelectorAll('[data-argus-sticky]')) {
-    try { el.removeAttribute('data-argus-sticky'); } catch (_) {}
-  }
-  return { ok: true };
-}
-```
-
-After step 6, call `probe.cleanupSticky`.
 
 ## Issues
 | issueType | severity | description |
 |---|---|---|
 | stickyDetachedOnScroll | high | "position:sticky element {selector} scrolled off-screen instead of pinning — ancestor probably has overflow:hidden or transform" |
 | fixedDetachedOnScroll | high | "position:fixed element {selector} is no longer visible after scroll — likely a transformed ancestor breaking the fixed-positioning context" |
+
+## Notes on this conversion
+- This replaces the old multi-probe orchestrator flow (capture → scroll MCP → wait → re-measure → restore MCP → cleanup) with ONE in-page async probe. Same checks, same issueTypes — the orchestrator makes a **single** `browser_evaluate` call instead of 6 MCP steps, so the skill is cheap, fast, and cannot be partially skipped (the restore can't be silently dropped).
+- Scrolling is done via in-page `window.scrollTo` + an in-page `setTimeout` promise wait — no real browser-level events are needed, so this is fully executable. The probe self-skips when there are no sticky/fixed elements OR when the page is not scrollable.

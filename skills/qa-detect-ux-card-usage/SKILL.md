@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasCards]
 ---
 
 ## What it catches — 6 issue types

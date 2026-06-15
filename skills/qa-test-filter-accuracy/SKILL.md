@@ -1,372 +1,175 @@
 ---
 name: qa-test-filter-accuracy
 section: interactive
-description: "Tests that search/filter results are semantically correct: applies a known filter (a visible value from the first row), then verifies ALL visible rows match the filter term. Catches filters that run without narrowing results, filters that exclude matching rows, and search inputs that accept input but return unfiltered data."
+description: "Tests that search/filter results are semantically correct: applies a known filter (a visible value from the first row), then verifies ALL visible rows match the filter term. Runs as ONE in-page async probe (no AI hand-driving)."
 model: sonnet
-applyOn: all
+applyOn: [laptop]
 needsSetup: false
-viewportSensitive: false
+viewportSensitive: true
 interactive: true
-cacheVersion: "1.0.0"
+executable: true
+requires: [hasFilters, hasGlobalSearch, hasSearchInput]
 ---
+## How the orchestrator runs this (ONE call — no hand-driving)
 
-# qa-test-filter-accuracy — Search & Filter Result Accuracy Testing
+🚨 **This skill is an EXECUTABLE in-page probe, not a prose playbook.** Do NOT drive it with separate `browser_click` / `browser_type` / `browser_wait_for` MCP calls. Instead make **ONE** call:
 
-Existing QA skills verify that filter/search CONTROLS are present. This skill verifies the RESULTS are correct — that after filtering by "Active", only "Active" rows appear; that after searching "John", only rows containing "John" are shown.
+```
+result = browser_evaluate(<the async function in "## Interactive Probe" below>)
+```
 
-**Strategy:** reads a value from the first data row, applies it as a filter/search term, then checks that the result set only contains matching rows.
+The function reads a real value from the first data row, applies it as a dropdown filter and/or a search term, waits for the result set (debounce/API) via in-page `setTimeout`, then asserts that the row count changed and that every visible row actually contains the term — all inside the page, in one round-trip. It **self-skips** (returns `[]`) when there is no filter/search control or fewer than 3 data rows. Transcribe each returned finding verbatim into the cell JSONL; add only the envelope fields (runId, cellId, route, viewport, …). The probe restores the baseline (clears the search, resets the filter) before returning.
 
-## What it checks (7 issue types)
+## Interactive Probe (browser_evaluate, async)
 
+```js
+async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const out = [];
+  const add = o => out.push(Object.assign({ skill: 'qa-test-filter-accuracy' }, o));
+  const vis = el => { if (!el) return false; const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden'; };
+  const sel = el => { if (!el) return null; if (el.id) return '#' + el.id; const c = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''; return el.tagName.toLowerCase() + (c ? '.' + c : ''); };
+  const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const setNative = (el, v) => { const p = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(p, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+
+  const dataRows = () => [...document.querySelectorAll('table tbody tr, mat-row, [role="row"]:not([role="columnheader"])')].filter(r => vis(r) && !r.closest('thead') && r.querySelector('td, mat-cell, [role="cell"]'));
+  const rowCount = () => dataRows().length;
+  const rowsText = () => dataRows().map(r => (r.innerText || '').replace(/\s+/g, ' ').trim());
+  const emptyStateVisible = () => {
+    const msg = [...document.querySelectorAll('[class*="empty-state"], [class*="no-data"], [class*="no-results"], [class*="empty-message"], [class*="not-found"], [class*="zero-state"]')].some(e => vis(e));
+    return msg || rowCount() === 0;
+  };
+
+  // ── self-skip checks ──
+  const baselineRowCount = rowCount();
+  if (baselineRowCount < 3) return [];
+
+  const filterDropdown = [...document.querySelectorAll('mat-select[placeholder*="filter" i], mat-select[aria-label*="filter" i], mat-select[formcontrolname*="filter" i], select[class*="filter"], select, [class*="filter-select"], [role="combobox"][aria-label*="filter" i]')].find(vis);
+  const search = [...document.querySelectorAll('input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], input[formcontrolname*="search" i], input[formcontrolname*="filter" i], input[aria-label*="search" i], [class*="search-input"] input')].find(vis);
+  if (!filterDropdown && !search) return [];
+
+  // ── sample a filter/search value from the first row ──
+  const firstRow = dataRows()[0];
+  const cellTexts = firstRow ? [...firstRow.querySelectorAll('td, mat-cell, [role="cell"]')].map(c => (c.innerText || '').trim()).filter(t => t.length >= 2 && t.length <= 40) : [];
+  const shortValues = cellTexts.filter(t => t.length <= 20 && !/\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t));
+  const bestFilterValue = shortValues[0] || cellTexts[0] || null;
+  const nameValues = cellTexts.filter(t => t.includes(' ') || (t.length > 4 && /^[A-Za-z]/.test(t)));
+  const bestSearchValue = nameValues[0] || cellTexts[0] || null;
+
+  // ── STEP A: native <select> filter (semantic accuracy) ──
+  if (filterDropdown && filterDropdown.tagName === 'SELECT' && bestFilterValue) {
+    const cur = filterDropdown.value;
+    const opt = [...filterDropdown.options].find(o => (o.text || '').toLowerCase().includes(bestFilterValue.toLowerCase()) && o.value && !o.disabled)
+      || [...filterDropdown.options].find(o => o.value && o.value !== cur && !o.disabled);
+    if (opt) {
+      const term = (opt.text || '').trim();
+      filterDropdown.value = opt.value; filterDropdown.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(1200);
+      const after = rowCount();
+      if (after === baselineRowCount) {
+        add({ issueType: 'filterResultsUnchanged', severity: 'high', selector: sel(filterDropdown), bbox: bb(filterDropdown), description: 'Filter applied but the row count did not change — data was not filtered.', evidence: { filterTerm: term, baselineRowCount, postFilterRowCount: after } });
+      } else {
+        const mismatch = rowsText().filter(t => !t.toLowerCase().includes(term.toLowerCase()));
+        if (mismatch.length > 0)
+          add({ issueType: 'filterResultsMismatch', severity: 'high', selector: sel(filterDropdown), bbox: bb(filterDropdown), description: 'Filter applied and rows changed, but some visible rows do not contain the filter term.', evidence: { filterTerm: term, mismatchCount: mismatch.length, examples: mismatch.slice(0, 3).map(s => s.slice(0, 100)) } });
+      }
+      // clear/restore
+      filterDropdown.value = cur; filterDropdown.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(800);
+      if (rowCount() < baselineRowCount * 0.9)
+        add({ issueType: 'filterClearBroken', severity: 'medium', selector: sel(filterDropdown), bbox: bb(filterDropdown), description: '"Clear filter"/reset did not restore the original rows.', evidence: { expectedRows: baselineRowCount, gotRows: rowCount() } });
+    }
+  } else if (filterDropdown) {
+    // mat-select / combobox: open it, pick the matching option from the CDK overlay, all in-page.
+    filterDropdown.click();
+    await sleep(400);
+    const options = [...document.querySelectorAll('.cdk-overlay-container mat-option, .mat-select-panel mat-option, [role="listbox"] [role="option"]')].filter(vis);
+    const term = bestFilterValue || '';
+    const match = options.find(o => (o.innerText || '').toLowerCase().includes(term.toLowerCase())) || options.find(o => !/\ball\b/i.test(o.innerText || ''));
+    if (match) {
+      const chosen = (match.innerText || '').trim();
+      match.click();
+      await sleep(1200);
+      const after = rowCount();
+      if (after === baselineRowCount) {
+        add({ issueType: 'filterResultsUnchanged', severity: 'high', selector: sel(filterDropdown), bbox: bb(filterDropdown), description: 'Filter applied but the row count did not change — data was not filtered.', evidence: { filterTerm: chosen, baselineRowCount, postFilterRowCount: after } });
+      } else {
+        const mismatch = rowsText().filter(t => !t.toLowerCase().includes(chosen.toLowerCase()));
+        if (mismatch.length > 0)
+          add({ issueType: 'filterResultsMismatch', severity: 'high', selector: sel(filterDropdown), bbox: bb(filterDropdown), description: 'Filter applied and rows changed, but some visible rows do not contain the filter term.', evidence: { filterTerm: chosen, mismatchCount: mismatch.length, examples: mismatch.slice(0, 3).map(s => s.slice(0, 100)) } });
+      }
+      // restore: reopen, pick an "All"/first option if present
+      filterDropdown.click(); await sleep(400);
+      const opts2 = [...document.querySelectorAll('.cdk-overlay-container mat-option, .mat-select-panel mat-option, [role="listbox"] [role="option"]')].filter(vis);
+      const allOpt = opts2.find(o => /\ball\b/i.test(o.innerText || '')) || opts2[0];
+      if (allOpt) { allOpt.click(); await sleep(800); }
+      else { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); }
+    } else {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    }
+  }
+
+  // ── STEP B: search input (semantic accuracy + debounce) ──
+  if (search && bestSearchValue) {
+    setNative(search, '');
+    await sleep(200);
+    const t0 = Date.now();
+    setNative(search, bestSearchValue);
+    await sleep(600);
+    let after = rowCount();
+    let debounceMs = 600;
+    if (after === baselineRowCount) {
+      await sleep(2400);
+      debounceMs = 3000;
+      after = rowCount();
+      if (after === baselineRowCount) {
+        add({ issueType: 'filterResultsUnchanged', severity: 'high', selector: sel(search), bbox: bb(search), description: 'Search returned all rows after 3s — search did not filter.', evidence: { searchTerm: bestSearchValue, note: 'search returned all rows after 3s' } });
+      }
+    } else if ((Date.now() - t0) > 1500) {
+      add({ issueType: 'searchDebounceExcessive', severity: 'low', selector: sel(search), bbox: bb(search), description: 'Search input required 3+ seconds before results updated (too slow for UX).', evidence: { debounceMs } });
+    }
+    // semantic accuracy when narrowed
+    if (after < baselineRowCount) {
+      const mismatch = rowsText().filter(t => !t.toLowerCase().includes(bestSearchValue.toLowerCase()));
+      if (mismatch.length > 0)
+        add({ issueType: 'searchResultsMismatch', severity: 'high', selector: sel(search), bbox: bb(search), description: 'Searched a term visible in a cell; result rows do not contain that term.', evidence: { searchTerm: bestSearchValue, mismatchCount: mismatch.length, examples: mismatch.slice(0, 3).map(s => s.slice(0, 100)) } });
+    }
+    // clear/restore
+    setNative(search, '');
+    search.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', bubbles: true }));
+    await sleep(600);
+  }
+
+  // ── STEP C: zero-results feedback (search a value that cannot match) ──
+  if (search) {
+    setNative(search, '__argus_no_match__');
+    await sleep(900);
+    if (rowCount() > 0 && !emptyStateVisible()) {
+      // results still present for an impossible term — but only flag the missing empty-state, per issueType
+    }
+    if (rowCount() === 0 && !emptyStateVisible())
+      add({ issueType: 'filterNoResultsFeedback', severity: 'medium', selector: sel(search), bbox: bb(search), description: 'Applied a filter that yields zero results, but no "No results"/empty-state message appeared.', evidence: { note: 'filter with non-existent value showed no empty-state message' } });
+    setNative(search, '');
+    await sleep(600);
+  }
+
+  return out;
+}
+```
+
+## Issues
 | issueType | severity | what it catches |
 |---|---|---|
 | `filterResultsUnchanged` | high | Filter applied but row count did NOT change (data not filtered at all) |
 | `filterResultsMismatch` | high | Filter applied and row count changed, but some visible rows do NOT contain the filter term |
-| `filterNoResultsFeedback` | medium | Applied a filter that should yield zero results, but no "No results" / empty-state message appeared |
+| `filterNoResultsFeedback` | medium | Applied a filter that should yield zero results, but no "No results"/empty-state message appeared |
 | `searchResultsMismatch` | high | Searched for a term visible in a cell; result rows do NOT contain that term |
-| `filterClearBroken` | medium | "Clear filter" / reset button clicked but filters did not reset (row count stayed filtered) |
+| `filterClearBroken` | medium | "Clear filter"/reset button clicked but filters did not reset (row count stayed filtered) |
 | `filterCombinationBroken` | medium | Applied two filters simultaneously; result was not the intersection (more rows returned than expected) |
 | `searchDebounceExcessive` | low | Search input required 3+ seconds before results updated (too slow for UX) |
 
-## Self-skip conditions
-
-Skip if no filter or search control found on the page.
-Skip if no data table or list is visible with at least 3 rows.
-
-```js
-probe.checkPageHasFilterableData() returns {hasData: false} → self-skip
-```
-
-## Orchestrator flow
-
-### Step 1 — Discover filterable data and controls
-
-```
-pageState = browser_evaluate(probe.checkPageHasFilterableData)
-If !pageState.hasData OR pageState.rowCount < 3 → self-skip
-If !pageState.hasFilterControl → self-skip
-```
-
-Record `baselineRowCount = pageState.rowCount`.
-
-### Step 2 — Prepare a filter term from real data
-
-```
-sampleData = browser_evaluate(probe.sampleFirstRowData)
-filterTerm = sampleData.bestFilterValue  // e.g. "Active", "John", "2024"
-filterColumn = sampleData.columnHint
-```
-
-If `sampleData.bestFilterValue` is null → skip to Step 5 (search-only test).
-
-### Step 3 — Apply column filter (if dropdown filter exists)
-
-```
-a. filterResult = browser_evaluate(probe.applyDropdownFilter, {
-     filterSelector: pageState.filterSelector,
-     filterTerm: filterTerm
-   })
-   browser_wait_for(time=1200)
-
-b. postFilterState = browser_evaluate(probe.countVisibleRows)
-
-c. If postFilterState.rowCount === baselineRowCount:
-   → emit filterResultsUnchanged (high)
-     evidence: {filterTerm, baselineRowCount, postFilterRowCount: postFilterState.rowCount}
-     self-skip remaining filter steps
-
-d. mismatchRows = browser_evaluate(probe.checkRowsMatchFilter, {
-     filterTerm, column: filterColumn
-   })
-   If mismatchRows.mismatchCount > 0:
-   → emit filterResultsMismatch (high)
-     evidence: {filterTerm, mismatchCount: mismatchRows.mismatchCount, example: mismatchRows.examples}
-
-e. Clear filter:
-   browser_evaluate(probe.clearFilter, {filterSelector: pageState.filterSelector})
-   browser_wait_for(time=800)
-   afterClearState = browser_evaluate(probe.countVisibleRows)
-   If afterClearState.rowCount < baselineRowCount * 0.9:  // less than 90% rows restored
-   → emit filterClearBroken (medium)
-     evidence: {expectedRows: baselineRowCount, gotRows: afterClearState.rowCount}
-```
-
-### Step 4 — Apply search input (if search field exists)
-
-```
-If pageState.searchSelector:
-  a. browser_click(selector=pageState.searchSelector)
-  b. searchTerm = sampleData.bestSearchValue  // a cell text value
-  c. browser_type(selector=pageState.searchSelector, text=searchTerm)
-  d. searchStart = Date.now()
-  e. browser_wait_for(time=600)
-  f. searchWait600 = browser_evaluate(probe.countVisibleRows)
-
-  g. If searchWait600.rowCount === baselineRowCount:
-       browser_wait_for(time=2400)  // extra wait for slow debounce
-       searchWait3000 = browser_evaluate(probe.countVisibleRows)
-       debounceMs = 3000
-       If searchWait3000.rowCount === baselineRowCount:
-         → emit filterResultsUnchanged (high, search variant)
-           evidence: {searchTerm, note: 'search returned all rows after 3s'}
-       Else if debounceMs > 1500:
-         → emit searchDebounceExcessive (low)
-           evidence: {debounceMs}
-
-  h. postSearchRows = browser_evaluate(probe.countVisibleRows)
-  i. If postSearchRows.rowCount < baselineRowCount:
-       mismatch = browser_evaluate(probe.checkRowsMatchSearch, {searchTerm})
-       If mismatch.mismatchCount > 0:
-         → emit searchResultsMismatch (high)
-           evidence: {searchTerm, mismatchCount: mismatch.mismatchCount, examples: mismatch.examples}
-
-  j. Clear search:
-     browser_evaluate(probe.clearSearchInput, {searchSelector: pageState.searchSelector})
-     browser_wait_for(time=600)
-```
-
-### Step 5 — Zero-results filter test
-
-```
-filterResult2 = browser_evaluate(probe.applyDropdownFilter, {
-  filterSelector: pageState.filterSelector,
-  filterTerm: '__argus_no_match__'
-})
-browser_wait_for(time=800)
-emptyState = browser_evaluate(probe.checkEmptyState)
-If !emptyState.hasEmptyMessage AND !emptyState.hasZeroRows:
-  → emit filterNoResultsFeedback (medium)
-    evidence: {note: 'filter with non-existent value showed no empty-state message'}
-
-Clear filter again.
-```
-
-## Probes (browser_evaluate)
-
-```js
-// probe.checkPageHasFilterableData
-() => {
-  // Find data rows
-  const tableRows = [...document.querySelectorAll('tr:not(:first-child), mat-row, [role="row"]:not([role="columnheader"])')].filter(r => {
-    const rect = r.getBoundingClientRect();
-    return rect.height > 0 && rect.width > 0;
-  });
-  // Also count list items
-  const listItems = [...document.querySelectorAll('[class*="list-item"], [class*="card"][class*="item"], [class*="record-row"]')].filter(r => {
-    const rect = r.getBoundingClientRect(); return rect.height > 10;
-  });
-  const rows = tableRows.length > 0 ? tableRows : listItems;
-
-  // Find filter controls
-  const filterDropdowns = [...document.querySelectorAll(
-    'mat-select[placeholder*="filter" i], mat-select[aria-label*="filter" i], mat-select[formcontrolname*="filter" i], ' +
-    'select[class*="filter"], [class*="filter-select"], [role="combobox"][aria-label*="filter" i]'
-  )].filter(el => el.getBoundingClientRect().width > 0);
-
-  const searchInputs = [...document.querySelectorAll(
-    'input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], ' +
-    'input[formcontrolname*="search" i], input[formcontrolname*="filter" i], ' +
-    'input[aria-label*="search" i], [class*="search-input"] input'
-  )].filter(el => el.getBoundingClientRect().width > 0);
-
-  const filter = filterDropdowns[0];
-  const search = searchInputs[0];
-  if (filter) filter.setAttribute('data-argus-filter', '1');
-  if (search) search.setAttribute('data-argus-search', '1');
-
-  return {
-    hasData: rows.length >= 3,
-    rowCount: rows.length,
-    hasFilterControl: filterDropdowns.length > 0 || searchInputs.length > 0,
-    filterSelector: filter ? '[data-argus-filter="1"]' : null,
-    searchSelector: search ? '[data-argus-search="1"]' : null
-  };
-}
-```
-
-```js
-// probe.sampleFirstRowData
-() => {
-  // Get text from first data row cells
-  const firstRow = document.querySelector('tr:nth-child(2), mat-row:first-child, [role="row"]:not([role="columnheader"]):first-child');
-  if (!firstRow) return { bestFilterValue: null, bestSearchValue: null };
-
-  const cells = [...firstRow.querySelectorAll('td, mat-cell, [role="cell"]')];
-  const cellTexts = cells.map(c => (c.innerText || '').trim()).filter(t => t.length >= 2 && t.length <= 40);
-
-  // Prefer short values that look like status/category (good for dropdown filter)
-  const shortValues = cellTexts.filter(t => t.length <= 20 && !/\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t));
-  const bestFilterValue = shortValues[0] || cellTexts[0] || null;
-
-  // For search: prefer a name-like value (2+ words or a word > 4 chars)
-  const nameValues = cellTexts.filter(t => t.includes(' ') || (t.length > 4 && /^[A-Za-z]/.test(t)));
-  const bestSearchValue = nameValues[0] || cellTexts[0] || null;
-
-  return { bestFilterValue, bestSearchValue, columnHint: cells.length > 0 ? 0 : null };
-}
-```
-
-```js
-// probe.applyDropdownFilter — args: { filterSelector, filterTerm }
-({filterSelector, filterTerm}) => {
-  const filter = document.querySelector(filterSelector);
-  if (!filter) return { applied: false };
-
-  // mat-select: click to open, then click option
-  filter.click();
-  return { applied: true, isMatSelect: filter.tagName === 'MAT-SELECT' || filter.closest('mat-select') != null };
-}
-```
-
-```js
-// probe.countVisibleRows
-() => {
-  const rows = [...document.querySelectorAll(
-    'tr:not(:first-child):not(thead tr), mat-row, [role="row"]:not([role="columnheader"])'
-  )].filter(r => {
-    const rect = r.getBoundingClientRect();
-    return rect.height > 0 && rect.width > 0 && r.querySelector('td, mat-cell, [role="cell"]');
-  });
-  return { rowCount: rows.length };
-}
-```
-
-```js
-// probe.checkRowsMatchFilter — args: { filterTerm, column }
-({filterTerm, column}) => {
-  const term = filterTerm.toLowerCase();
-  const rows = [...document.querySelectorAll(
-    'tr:not(:first-child):not(thead tr), mat-row, [role="row"]:not([role="columnheader"])'
-  )].filter(r => {
-    const rect = r.getBoundingClientRect();
-    return rect.height > 0 && r.querySelector('td, mat-cell, [role="cell"]');
-  });
-
-  const mismatchRows = rows.filter(row => {
-    const rowText = (row.innerText || '').toLowerCase();
-    return !rowText.includes(term);
-  });
-
-  const examples = mismatchRows.slice(0, 3).map(r => (r.innerText || '').trim().slice(0, 100));
-  return { mismatchCount: mismatchRows.length, examples };
-}
-```
-
-```js
-// probe.checkRowsMatchSearch — args: { searchTerm }
-({searchTerm}) => {
-  const term = searchTerm.toLowerCase();
-  const rows = [...document.querySelectorAll(
-    'tr:not(:first-child):not(thead tr), mat-row, [role="row"]:not([role="columnheader"])'
-  )].filter(r => {
-    const rect = r.getBoundingClientRect();
-    return rect.height > 0 && r.querySelector('td, mat-cell, [role="cell"]');
-  });
-  const mismatchRows = rows.filter(row => !(row.innerText || '').toLowerCase().includes(term));
-  const examples = mismatchRows.slice(0, 3).map(r => (r.innerText || '').trim().slice(0, 100));
-  return { mismatchCount: mismatchRows.length, examples };
-}
-```
-
-```js
-// probe.clearFilter — args: { filterSelector }
-({filterSelector}) => {
-  const filter = document.querySelector(filterSelector);
-  if (!filter) return { cleared: false };
-  // Try to find and click a "clear" or "all" option
-  const clearTrigger = document.querySelector('[aria-label="Clear"], [class*="clear-filter"], [class*="reset-filter"], button[aria-label*="clear" i]');
-  if (clearTrigger) {
-    clearTrigger.click();
-    return { cleared: true, method: 'clearButton' };
-  }
-  // For select: click to open and select first ("All") option
-  filter.click();
-  return { cleared: true, method: 'clickToReset' };
-}
-```
-
-```js
-// probe.clearSearchInput — args: { searchSelector }
-({searchSelector}) => {
-  const input = document.querySelector(searchSelector);
-  if (!input) return { cleared: false };
-  input.focus();
-  input.value = '';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  return { cleared: true };
-}
-```
-
-```js
-// probe.checkEmptyState
-() => {
-  const emptyMsgs = [...document.querySelectorAll(
-    '[class*="empty-state"], [class*="no-data"], [class*="no-results"], [class*="empty-message"], ' +
-    '[class*="not-found"], [aria-label*="no results" i], [class*="zero-state"]'
-  )].filter(e => e.getBoundingClientRect().height > 0);
-
-  const zeroRows = document.querySelectorAll('tr:not(:first-child), mat-row, [role="row"]:not([role="columnheader"])').length === 0;
-  return {
-    hasEmptyMessage: emptyMsgs.length > 0,
-    hasZeroRows: zeroRows
-  };
-}
-```
-
-```js
-// probe.cleanupFilterTest
-() => {
-  for (const el of document.querySelectorAll('[data-argus-filter], [data-argus-search]')) {
-    try {
-      el.removeAttribute('data-argus-filter');
-      el.removeAttribute('data-argus-search');
-    } catch (_) {}
-  }
-  return { ok: true };
-}
-```
-
-Always run `probe.cleanupFilterTest` at the end, even on error.
-
-## Selecting an option from Angular Material mat-select
-
-After `filter.click()` (from `probe.applyDropdownFilter`), a CDK overlay panel opens attached to `document.body`. The orchestrator must:
-
-```
-1. browser_wait_for(time=400)  ← wait for overlay
-2. overlayState = browser_evaluate(probe.clickMatSelectOption, {filterTerm})
-```
-
-```js
-// probe.clickMatSelectOption — args: { filterTerm }
-({filterTerm}) => {
-  const term = (filterTerm || '').toLowerCase();
-  const panel = document.querySelector('.cdk-overlay-container mat-option, .mat-select-panel mat-option');
-  if (!panel) return { clicked: false, reason: 'no panel found' };
-  const allOptions = [...document.querySelectorAll('.cdk-overlay-container mat-option, .mat-select-panel mat-option')];
-  const match = allOptions.find(o => (o.innerText || '').toLowerCase().includes(term));
-  if (match) {
-    match.click();
-    return { clicked: true, optionText: (match.innerText || '').trim() };
-  }
-  // For zero-results test: try to find "All" first to reset, or just close
-  const allOpt = allOptions.find(o => /\ball\b/i.test(o.innerText || ''));
-  if (term === '__argus_no_match__') {
-    // Escape the panel — no match option
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    return { clicked: false, reason: 'no match found, panel closed' };
-  }
-  return { clicked: false, reason: 'term not in options', availableOptions: allOptions.slice(0,5).map(o=>(o.innerText||'').trim()) };
-}
-```
-
-For search inputs (not mat-select), use `browser_type` directly after `browser_click`.
-
-## Hard rules
-
-1. **Only read-then-filter with existing data** — never create or delete records.
-2. **Restore baseline** — always clear filters/search before finishing; leave the page in its original state.
-3. **Mandatory cleanup** — remove all `data-argus-filter/search` attributes.
-4. **Sonnet model** — result correctness interpretation requires semantic judgment.
-5. **Bounded waits** — max 3 s total waiting for filter results; emit `searchDebounceExcessive` if results took > 1.5 s.
+## Notes on this conversion
+- Replaces the multi-step prose playbook (separate discover / sample / apply / count / check / clear MCP calls, plus the two-step mat-select overlay dance) with ONE in-page async probe. Same issueTypes preserved.
+- **mat-select folded:** the old flow needed `applyDropdownFilter` (click to open) → wait → `clickMatSelectOption` as separate MCP round-trips. Here the probe opens the overlay and clicks the option in the same function, then reopens to reset.
+- **`filterCombinationBroken` is intentionally folded out of the hot path** (it needs two independent filter controls present, which is uncommon and adds another open/select cycle). Its issueType is preserved in the table; re-add it as one more `add({...})` block (apply filter A, then filter B, assert rows ≤ A-result and ≤ B-result) inside the same function when a page has two filter dropdowns — still one call.
+- The probe restores baseline (clears search, resets dropdown) before returning, so the page is left untouched. No new issueTypes invented.

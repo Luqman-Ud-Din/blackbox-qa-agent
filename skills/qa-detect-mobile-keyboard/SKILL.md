@@ -1,41 +1,38 @@
 ---
 name: qa-detect-mobile-keyboard
 section: responsiveness
-description: "Detects layout that breaks when the on-screen keyboard appears AND inputs with wrong type/inputmode that show the wrong keyboard on mobile (QWERTY instead of numpad, etc.)"
+description: "Detects layout that breaks when the on-screen keyboard appears AND inputs with wrong type/inputmode that show the wrong keyboard on mobile (QWERTY instead of numpad, etc.). Runs as ONE in-page async probe (no AI hand-driving)."
 model: haiku
 applyOn: [mobile]
 needsSetup: false
 viewportSensitive: true
 interactive: true
+executable: true
+requires: [hasInputs]
 ---
 
-## What it checks
+## How the orchestrator runs this (ONE call — no hand-driving)
 
-- **Wrong mobile keyboard** — input fields whose label/name/placeholder implies a specific data type (phone, email, postal code, card number, amount) but lack the correct `type` or `inputmode` attribute. Users get QWERTY when they need a numpad.
-- **Input hidden by keyboard** — a fixed bottom bar covers the focused input when the on-screen keyboard appears
-- **No scroll-into-view** — focused input in the lower 40% of viewport and page doesn't scroll it up
-- **No visualViewport API** — page cannot dynamically respond to keyboard appearance
+🚨 **This skill is an EXECUTABLE in-page probe, not a prose playbook.** Do NOT drive it with separate `browser_click` / `browser_wait_for` MCP steps. Instead make **ONE** call:
 
-## Orchestrator flow
+```
+result = browser_evaluate(<the async function in "## Interactive Probe" below>)
+```
 
-0. Run `probe.checkInputMobileKeyboards` (passive) — emit `wrongMobileKeyboard` for each mismatched input. Does not interact with the page.
-1. Run `probe.findInputForKeyboardTest` — returns `{found, selector, initialPosition}`. If `found` is false → **self-skip**.
-2. `browser_click(selector=<input selector>)` — focus it (does not summon a real keyboard in headless, but triggers focus handlers)
-3. `browser_wait_for(time=400)` — allow any scroll-into-view JS to run
-4. Run `probe.checkInputVisibilityAfterFocus({selector})` — measures position relative to simulated keyboard zone
-5. Emit findings:
-   - If `coveredByBottomFixed` is true → emit `inputHiddenByBottomBar` (high)
-   - If `inKeyboardZone` is true AND `didScrollIntoView` is false → emit `inputInKeyboardZoneNoScroll` (medium)
-   - If site has no visualViewport listener → emit `noVisualViewportHandling` (low)
-6. Run `probe.blurInput({selector})` — blur it to leave page clean.
+The function (1) passively scans every input for a wrong `type`/`inputmode` vs its label/placeholder semantics, then (2) focuses the lowest visible input in-page (`el.focus()`), waits with an in-page `setTimeout` promise so any scroll-into-view JS runs, and measures whether the input sits in the simulated keyboard zone or is covered by a fixed bottom bar — all inside the page, in one round-trip. There is **no AI reasoning between steps**. It **self-skips** (returns `[]`) when the page has no usable inputs. Transcribe each returned finding verbatim into the cell JSONL; add only the envelope fields (runId, cellId, route, viewport, …). The probe blurs the focused input before returning.
 
-## Probes (browser_evaluate)
+**Detection-only note:** an in-page probe cannot summon a real on-screen keyboard (that requires a physical device / real OS soft-keyboard). The keyboard-overlap and scroll-into-view checks are therefore *static heuristics* — they measure the input's position against a simulated keyboard zone (lower 40% of the viewport) and detect fixed bottom bars that would compound real-keyboard occlusion. This is the same approximation the old prose flow used; no real-device step is added.
+
+## Interactive Probe (browser_evaluate, async)
 
 ```js
-// probe.checkInputMobileKeyboards — passive scan, no interaction
-() => {
+async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const out = [];
+  const add = o => out.push(Object.assign({ skill: 'qa-detect-mobile-keyboard' }, o));
   const bb = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+
+  // ── (1) PASSIVE: wrong mobile keyboard ──
   const heuristics = [
     { test: /phone|tel|mobile|cell|fax/i,              expectedType: 'tel',    expectedInputmode: 'tel',     label: 'phone number' },
     { test: /email|e-mail/i,                            expectedType: 'email',  expectedInputmode: 'email',   label: 'email address' },
@@ -50,116 +47,65 @@ interactive: true
     const r = input.getBoundingClientRect();
     if (r.width === 0 || r.height === 0 || input.disabled || input.readOnly) continue;
     const labelEl = input.labels && input.labels[0];
-    const labelText = (
-      (labelEl && (labelEl.innerText || labelEl.textContent)) ||
-      input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || ''
-    ).toLowerCase();
+    const labelText = ((labelEl && (labelEl.innerText || labelEl.textContent)) || input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || '').toLowerCase();
     if (!labelText) continue;
     const currentType = (input.type || 'text').toLowerCase();
     const currentInputmode = (input.getAttribute('inputmode') || '').toLowerCase();
     const sel = input.id ? `#${input.id}` : (input.name ? `[name="${input.name}"]` : 'input');
     for (const h of heuristics) {
       if (!h.test.test(labelText)) continue;
-      const typeOk = currentType === h.expectedType;
-      const modeOk = currentInputmode === h.expectedInputmode;
-      if (!typeOk && !modeOk) {
-        out.push({ issueType: 'wrongMobileKeyboard', severity: 'medium', selector: sel,
-          description: `"${labelText}" field uses type="${currentType}" without inputmode="${h.expectedInputmode}" — mobile users see QWERTY instead of the ${h.expectedInputmode} keyboard`,
-          bbox: bb(input) });
-      }
+      if (currentType !== h.expectedType && currentInputmode !== h.expectedInputmode)
+        add({ issueType: 'wrongMobileKeyboard', severity: 'medium', selector: sel, bbox: bb(input), description: `"${labelText}" field uses type="${currentType}" without inputmode="${h.expectedInputmode}" — mobile users see QWERTY instead of the ${h.expectedInputmode} keyboard.`, evidence: { currentType, expectedInputmode: h.expectedInputmode } });
       break;
     }
   }
-  return out;
-}
-```
 
-```js
-// probe.findInputForKeyboardTest
-() => {
-  // Pick the LAST visible text input on the page (most likely to be in the keyboard zone)
+  // ── (2) pick the lowest visible input, focus it ──
   const inputs = [...document.querySelectorAll('input[type="text"], input[type="email"], input[type="password"], input[type="search"], textarea')]
-    .filter(el => {
-      const r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly;
-    });
-  if (inputs.length === 0) return { found: false };
-  // Choose the one furthest down — most likely to be hit by the keyboard
+    .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly; });
+  if (inputs.length === 0) return out; // self-skip the interaction part (passive findings still returned)
+
   inputs.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
   const target = inputs[inputs.length - 1];
-  const r = target.getBoundingClientRect();
-  return {
-    found: true,
-    selector: target.id ? `#${target.id}` : `[name="${target.name || ''}"]`,
-    initialPosition: { top: Math.round(r.top), bottom: Math.round(r.bottom) }
-  };
-}
-```
+  const targetSel = target.id ? `#${target.id}` : (target.name ? `[name="${target.name}"]` : target.tagName.toLowerCase());
+  const initialTop = Math.round(target.getBoundingClientRect().top);
 
-```js
-// probe.checkInputVisibilityAfterFocus  — args: { selector }
-({selector}) => {
-  let el;
-  try { el = document.querySelector(selector); } catch (_) { return { coveredByBottomFixed: false }; }
-  if (!el) return { coveredByBottomFixed: false };
+  try { target.focus(); target.dispatchEvent(new FocusEvent('focus', { bubbles: false })); } catch (_) {}
+  await sleep(400);
 
   const vh = window.innerHeight;
-  const r = el.getBoundingClientRect();
-  // Simulated keyboard zone: lower 40% of the viewport on iOS, ~50% on Android
+  const r = target.getBoundingClientRect();
+  const currentTop = Math.round(r.top);
   const keyboardTop = vh * 0.6;
   const inKeyboardZone = r.bottom > keyboardTop;
+  const didScrollIntoView = Math.abs(currentTop - initialTop) > 8;
 
-  // Check for fixed/sticky bottom bars covering the input
-  let coveredByBottomFixed = false;
-  let coveringSelector = '';
+  // fixed/sticky bottom bar overlapping the input
+  let coveredByBottomFixed = false, coveringSelector = '';
   for (const c of document.querySelectorAll('[class*="bottom"], [class*="footer"], [class*="tab-bar"], [class*="sticky"], [class*="fixed"]')) {
     const cs = getComputedStyle(c);
     if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
     const cr = c.getBoundingClientRect();
     if (cr.height === 0) continue;
-    // Bar at the bottom of the viewport
-    if (cr.bottom > vh - 4 && cr.top > vh - 200) {
-      // Does it overlap the input vertically?
-      if (cr.top < r.bottom && cr.bottom > r.top) {
-        coveredByBottomFixed = true;
-        coveringSelector = c.id ? `#${c.id}` : c.tagName.toLowerCase();
-        break;
-      }
+    if (cr.bottom > vh - 4 && cr.top > vh - 200 && cr.top < r.bottom && cr.bottom > r.top) {
+      coveredByBottomFixed = true; coveringSelector = c.id ? `#${c.id}` : c.tagName.toLowerCase(); break;
     }
   }
-
-  // visualViewport API usage check (heuristic): does any script attach an event listener?
-  // This is impossible to read directly. Instead, we check whether window.visualViewport exists
-  // (it does on modern browsers) AND whether there's a function on window that mentions it.
   const visualViewportAvailable = !!window.visualViewport;
 
-  // Heuristic for scroll-into-view: was input.scrollIntoView() called?
-  // We can't observe this directly. Approximation: did the input position change between baseline and now?
-  // The orchestrator carries `initialPosition` from probe.findInputForKeyboardTest and compares.
+  if (coveredByBottomFixed)
+    add({ issueType: 'inputHiddenByBottomBar', severity: 'high', selector: targetSel, bbox: bb(target), description: `Focused input is overlapped by a fixed bottom bar (${coveringSelector}) — keyboard would cover even more of the input on a real device.`, evidence: { coveringSelector } });
+  if (inKeyboardZone && !didScrollIntoView)
+    add({ issueType: 'inputInKeyboardZoneNoScroll', severity: 'medium', selector: targetSel, bbox: bb(target), description: 'Focused input sits in the lower 40% of the viewport and the page did not scroll it into view — on a real device the keyboard hides it.', evidence: { initialTop, currentTop, vh } });
+  if (!visualViewportAvailable)
+    add({ issueType: 'noVisualViewportHandling', severity: 'low', selector: targetSel, bbox: bb(target), description: 'Site does not appear to use the visualViewport API — cannot dynamically respond to keyboard appearance.', uncertain: true, evidence: {} });
 
-  return {
-    coveredByBottomFixed,
-    coveringSelector,
-    inKeyboardZone,
-    currentTop: Math.round(r.top),
-    visualViewportAvailable
-  };
+  // ── RESTORE: blur ──
+  try { target.blur(); document.body.focus(); } catch (_) {}
+
+  return out;
 }
 ```
-
-```js
-// probe.blurInput  — args: { selector }
-({selector}) => {
-  try {
-    const el = document.querySelector(selector);
-    if (el) el.blur();
-    document.body.focus();
-  } catch (_) {}
-  return { ok: true };
-}
-```
-
-The orchestrator compares `currentTop` to the `initialPosition.top` it captured in step 1 to decide whether the page scrolled the input into view automatically. If they're identical AND `inKeyboardZone` is true, emit `inputInKeyboardZoneNoScroll`.
 
 ## Issues
 | issueType | severity | description |
@@ -168,3 +114,7 @@ The orchestrator compares `currentTop` to the `initialPosition.top` it captured 
 | inputHiddenByBottomBar | high | "Focused input is overlapped by a fixed bottom bar — keyboard would cover even more of the input on real device" |
 | inputInKeyboardZoneNoScroll | medium | "Focused input sits in the lower 40% of the viewport and the page did not scroll it into view — on real device the keyboard hides it" |
 | noVisualViewportHandling | low | "Site does not appear to use the visualViewport API — cannot dynamically respond to keyboard appearance" |
+
+## Notes on this conversion
+- This replaces the old multi-probe orchestrator flow (passive scan → findInput → browser_click → wait → measure → blur) with ONE in-page async probe. Same checks, same issueTypes — the orchestrator makes a **single** `browser_evaluate` call instead of ~5 MCP steps.
+- Focus is applied via in-page `el.focus()` instead of `browser_click`, and scroll-into-view is detected by comparing the input's top before vs after focus (the old flow carried `initialPosition` across two probes; here it is captured and compared inside one function). The on-screen-keyboard occlusion checks remain static heuristics — a real soft keyboard cannot be summoned in-page; that limitation existed in the prose version too and no real-device MCP step was ever part of this skill.

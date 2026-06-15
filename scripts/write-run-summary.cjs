@@ -111,7 +111,7 @@ const summary = {
   cellsRun:            cellsWithFindings,
   routesDiscovered:    [...new Set((plan.cells || []).map(c => c.route))].length,
   browsers:            plan.browsers || [],
-  viewports:           (plan.viewports || []).map(v => `${v.name || v.class} (${v.width}×${v.height})`),
+  viewports:           (plan.viewports || []).map(v => v.width && v.height ? `${v.name || v.class} (${v.width}×${v.height})` : (v.name || v.class)),
   rawFindings:         findings.length,
   validatedFindings:   findings.filter(f => f.severity !== 'info').length,
   adoBugsFiled:        adoBugIds.length,

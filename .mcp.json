@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "playwright":          { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
-    "pw-chromium-mobile":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
-    "pw-chromium-tablet":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
+    "pw-chromium-mobile":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium", "--device", "iPhone 12"] },
+    "pw-chromium-tablet":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium", "--device", "iPad Air"] },
     "pw-chromium-laptop":  { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "chromium"] },
     "pw-firefox-mobile":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },
     "pw-firefox-tablet":   { "command": "npx", "args": ["@playwright/mcp@latest", "--isolated", "--browser", "firefox"] },

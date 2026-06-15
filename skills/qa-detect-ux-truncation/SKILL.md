@@ -12,12 +12,14 @@ viewportSensitive: true
 
 | issueType | severity | What |
 |---|---|---|
-| `headerTextTruncatedMidWord` | high | Table header cell shows ellipsised / clipped text mid-word ("Reg…", "Clas…", "Nan…") — column name not readable (your Students page bug) |
-| `cellContentTruncatedToCharacter` | high | Body cell displays only 1-2 characters of likely-longer content (e.g. "B" instead of "Babar Ali") AND `scrollWidth > clientWidth + 2` (your Students page bug) |
+| `headerTextTruncatedMidWord` | high | Table header cell shows ellipsised / clipped text mid-word ("Reg…", "Clas…", "Nan…") — column name not readable |
+| `cellContentTruncatedToCharacter` | high | Body cell displays only 1-2 characters of likely-longer content AND `scrollWidth > clientWidth + 2` |
 | `buttonTextEllipsised` | medium | Button text is visually truncated (overflow:hidden + ellipsis) — action label unclear |
 | `breadcrumbItemTruncated` | low | Breadcrumb item shows ellipsis — path becomes unreadable |
 | `inputValueClippedNoExpand` | low | Text input has value longer than visible width, no horizontal scroll, no auto-grow |
 | `tabLabelTruncated` | medium | Tab label clipped — user can't tell which tab is which |
+| `cardSubtitleTruncated` | medium | Stat card subtitle like "Liv…" truncated — metric context lost, card meaning becomes ambiguous |
+| `tableCellNumericTruncated` | high | Numeric/amount column (Paid, Fee, Balance, Amount…) shows truncated values like "2,…" or "1,3…" — full value hidden on narrow/mobile viewport |
 
 ## Probe (browser_evaluate)
 
@@ -179,13 +181,94 @@ viewportSensitive: true
     }
   }
 
+  // ── 7. Stat card subtitle truncated ─────────────────────────────────────
+  // Catches subtitles like "Liv..." (truncation of "Living", "Live count", etc.)
+  // inside stat/summary cards. The subtitle provides metric context — truncation
+  // makes the card ambiguous (e.g. "3. Liv..." — Liv... what?).
+  let subtitleFlagged = 0;
+  const CARD_SEL2 = '[class*="stat"],[class*="kpi"],[class*="summary-card"],[class*="metric"],[class*="widget-card"],[class*="count-card"],[class*="overview-card"],[class*="overview-item"],.card';
+  for (const card of document.querySelectorAll(CARD_SEL2)) {
+    if (subtitleFlagged >= 4) break;
+    if (!visible(card)) continue;
+    const candidates = [...card.querySelectorAll('span,p,small,[class*="subtitle"],[class*="sub-label"],[class*="caption"],[class*="meta"],[class*="desc"],[class*="hint"]')]
+      .filter(el => {
+        if (!visible(el)) return false;
+        const t = (el.innerText || '').trim();
+        return t.length >= 2 && t.length <= 60;
+      });
+    for (const el of candidates) {
+      if (subtitleFlagged >= 4) break;
+      const cs = getComputedStyle(el);
+      const clippedByOverflow = (cs.overflow === 'hidden' || cs.overflowX === 'hidden') && el.scrollWidth > el.clientWidth + 3;
+      const clippedByEllipsis = cs.textOverflow === 'ellipsis' && el.scrollWidth > el.clientWidth + 3;
+      const endsAbruptly = /[a-zA-Z]$/.test((el.innerText || '').trim());
+      if ((clippedByOverflow || clippedByEllipsis) && endsAbruptly) {
+        subtitleFlagged++;
+        const t = (el.innerText || '').trim();
+        out.push({ issueType:'cardSubtitleTruncated', severity:'medium', selector:sel(el), bbox:bb(el),
+          description:`Stat card subtitle "${t.slice(0,30)}" is truncated (content ${el.scrollWidth}px > container ${el.clientWidth}px). Subtitle provides metric context — truncation makes the card ambiguous. Increase card width or shorten the subtitle copy.` });
+      }
+    }
+  }
+
+  // ── 8. Numeric/amount column truncated on narrow/mobile viewport ────────
+  // Catches "2,..." "1,3..." patterns where currency/count values are cut off.
+  // Fires when ≥ 2 cells in the same column are visually truncated AND the column
+  // header or cell content indicates numeric/financial data.
+  let numericTruncFlagged = 0;
+  const NUMERIC_HDR = /paid|fee|amount|balance|total|price|cost|salary|budget|revenue|income|expense|tax|deposit|pending|credit|debit|qty|quantity|count|score|rate|percent|pkr|usd|eur|gbp|\$/i;
+  const tables3 = [...document.querySelectorAll('table, [role="table"], [role="grid"]')].filter(visible);
+  for (const tbl of tables3.slice(0, 4)) {
+    if (numericTruncFlagged >= 3) break;
+    const hdrCells = [...tbl.querySelectorAll('thead th, thead [role="columnheader"], [role="row"]:first-child [role="columnheader"]')].filter(visible);
+    const bRows = [...tbl.querySelectorAll('tbody tr, [role="rowgroup"]:not(:first-child) [role="row"]')].filter(visible);
+    if (bRows.length < 2) continue;
+    for (let ci = 0; ci < hdrCells.length; ci++) {
+      if (numericTruncFlagged >= 3) break;
+      const hdrText = (hdrCells[ci].innerText || '').trim();
+      // Require numeric-sounding header OR detect from cell content
+      let truncCells = [], numericCells = 0, sampled = 0;
+      for (const row of bRows.slice(0, 6)) {
+        const cells = [...row.querySelectorAll('td, [role="cell"]')];
+        const cell = cells[ci];
+        if (!cell || !visible(cell)) continue;
+        sampled++;
+        const cellText = (cell.innerText || '').trim();
+        const cs = getComputedStyle(cell);
+        // Numeric content heuristic: has digits with commas/dots (e.g. "2,850", "1,375")
+        if (/^\d[\d,.\s]*$/.test(cellText) || /\d{1,3}(?:,\d{3})+/.test(cellText)) numericCells++;
+        // Truncation detection — two cases:
+        //   A) CSS text-overflow:ellipsis with scrollWidth > clientWidth
+        const cssTruncated = cs.textOverflow === 'ellipsis' && cell.scrollWidth > cell.clientWidth + 2;
+        //   B) JS-injected literal ellipsis ("2,..." "1,3…") — Angular/PrimeNG pattern
+        const literalTruncated = /[.,]\.\.\.$|…$|\.\.\.$/.test(cellText) || cellText.endsWith('...');
+        //   C) title attribute differs from visible text (framework sets full value as tooltip)
+        const titleVal = (cell.getAttribute('title') || '').trim();
+        const titleDiffers = titleVal.length > 0 && titleVal !== cellText && titleVal.length > cellText.length;
+        if (cssTruncated || literalTruncated || titleDiffers) {
+          truncCells.push(cellText.slice(0, 20));
+        }
+      }
+      // Fire if: ≥ 2 truncated AND (numeric header OR ≥ 2 numeric cells)
+      const isNumericCol = NUMERIC_HDR.test(hdrText) || numericCells >= 2;
+      if (sampled >= 2 && truncCells.length >= 2 && isNumericCol) {
+        numericTruncFlagged++;
+        out.push({
+          issueType: 'tableCellNumericTruncated', severity: 'high',
+          selector: sel(hdrCells[ci]), bbox: bb(hdrCells[ci]),
+          description: `Column "${hdrText}" shows truncated numeric values (${truncCells.slice(0,3).map(v=>`"${v}"`).join(', ')}) at ${Math.round(hdrCells[ci].getBoundingClientRect().width)}px wide. Amounts are cut off on this viewport — use horizontal scroll, responsive column hiding, or compact number format (e.g. "2.8K").`
+        });
+      }
+    }
+  }
+
   return out;
 }
 ```
 
 ## Notes
 
-- Bounded: 4 header + 3 cell + 3 button + 2 breadcrumb + 3 input + 3 tab = max ~18
+- Bounded: 4 header + 3 cell + 3 button + 2 breadcrumb + 3 input + 3 tab + 4 subtitle + 3 numeric = max ~21
 - Self-skips: page with no tables/buttons/breadcrumbs returns []
 - The `headerTextTruncatedMidWord` catches "Reg", "Nan", "Clas" headers from your Students page
 - The `cellContentTruncatedToCharacter` catches "B", "C", "M" body cells from your Students page

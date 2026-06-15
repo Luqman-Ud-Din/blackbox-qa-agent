@@ -6,6 +6,7 @@ model: haiku
 applyOn: all
 needsSetup: false
 viewportSensitive: false
+requires: [hasToastMessages, hasToastContainer, hasAlertBanners]
 ---
 
 ## Why this skill exists
@@ -18,16 +19,17 @@ viewportSensitive: false
 
 Plus 3 new toast-specific a11y checks.
 
-## What it catches — 6 issue types
+## What it catches — 5 issue types
 
 | issueType | severity | What |
 |---|---|---|
 | `toastGenericMessage` | medium | Toast text matches generic patterns ("successfully completed", "done", "ok", "success", "action successful") with no subject — doesn't say *what* succeeded |
 | `toastSentenceFragment` | low | Toast text is an adverb-led fragment ("successfully created", "easily done") or a single-word fragment ("Saved", "Done") without a subject — incomplete sentence |
 | `toastTrailingPunctuation` | low | Toast text ends with `,` `;` `:` instead of `.` `!` or no punctuation. Your "successfully completed," bug. |
-| `toastMissingLiveRegion` | high | Toast / notification / snackbar element has no `role="alert"`, `role="status"`, or `aria-live` — invisible to assistive tech |
 | `toastCloseButtonNoLabel` | high | Close button (×, ✕, X) inside a toast has no `aria-label`/`title` — screen readers announce only "button" with no context |
 | `statusColorOnlySignal` | medium | Status badge/chip uses saturated red/green/yellow background AND its text contains no explicit state word (success/error/warning/active/done/etc.) — color-blind users miss the meaning |
+
+> **Removed 2026-06-11:** `toastMissingLiveRegion` was removed because the check only inspected the toast element itself, not its ancestor chain. Most toast libraries place `aria-live` on a parent container/portal — checking only the toast produced unavoidable false positives on standard library output.
 
 ## Probe (browser_evaluate)
 
@@ -110,17 +112,13 @@ Plus 3 new toast-specific a11y checks.
       });
     }
 
-    // ── 4. Missing ARIA live region ────────────────────────────────────
-    const role = toast.getAttribute('role');
-    const ariaLive = toast.getAttribute('aria-live');
-    const hasLive = role === 'alert' || role === 'status' || ariaLive === 'polite' || ariaLive === 'assertive';
-    if (!hasLive) {
-      out.push({
-        issueType: 'toastMissingLiveRegion', severity: 'high',
-        selector: sel(toast), bbox: bb(toast),
-        description: `Toast/notification has no role="alert", role="status", or aria-live attribute. Screen readers will not announce the message when it appears.`
-      });
-    }
+    // ── 4. (removed) Missing ARIA live region ──────────────────────────
+    // The live-region check was removed because most toast libraries (React
+    // Toastify, ngx-toastr, Angular Material snackbar, Bootstrap toasts, Vue
+    // Sonner) place `aria-live` on a PARENT container/portal — not on the
+    // individual toast element. Checking only the toast itself produced
+    // unavoidable false positives on standard library output ("You are Online"
+    // toast on the Issue Budget screenshot, 2026-06-11).
 
     // ── 5. Close button without accessible name ────────────────────────
     const closeCandidates = [...toast.querySelectorAll('button, a, [role="button"], [class*="close"], [class*="dismiss"]')];
@@ -183,4 +181,4 @@ Plus 3 new toast-specific a11y checks.
   - `toastSentenceFragment` — catches "successfully completed" adverb-led fragment
   - `statusColorOnlySignal` — catches green/red/yellow badges without explicit state words
 - Bonus: `toastTrailingPunctuation` directly catches the "successfully completed**,**" trailing-comma bug
-- `toastMissingLiveRegion` and `toastCloseButtonNoLabel` add deterministic a11y coverage that the existing `qa-detect-a11y` would miss specifically for transient toast UI
+- `toastCloseButtonNoLabel` adds deterministic a11y coverage that the existing `qa-detect-a11y` would miss specifically for transient toast UI
