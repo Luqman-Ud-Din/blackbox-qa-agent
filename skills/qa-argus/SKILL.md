@@ -1411,6 +1411,16 @@ node "{project-root}/scripts/coverage-gate.cjs" "{runId}"
 
 **The run may not advance to sub-step 1 until `coverage-gate.cjs` exits 0 (or remaining pairs are explicitly `degraded` after exhausting retries).** "Most skills ran" is not acceptable — the gate names every missing one, passive or interactive, and they get re-run.
 
+##### 5.9.0.4 — Cross-viewport parity pass (MANDATORY when mobile cells ran — emits `qa-detect-viewport-parity`)
+
+`qa-detect-viewport-parity` cannot run in a single cell (it compares desktop vs mobile feature sets). Each cell dumped a fingerprint to `issues/{cellId}-parity.json` (worker Step 7d). This deterministic post-pass groups them by route and emits `featureDroppedOnMobile` where a column/action present on desktop is absent on mobile:
+
+```
+node "{project-root}/scripts/check-viewport-parity.cjs" "{runId}"
+```
+
+It writes `issues/parity-findings.jsonl`, which the keep-issuetypes filter (next), collapse, annotation, and bug-filer pick up like any other findings file. Advisory (exit 0 always) — never blocks the run.
+
 ##### 5.9.0.5 — Apply `[keep_issuetypes]` filter (MANDATORY, runs after coverage gate, before annotation)
 
 The `[keep_issuetypes]` table in `customize.toml` is the user's noise-filter: for skills that mix real defects with cosmetic findings, ONLY the listed issueTypes should be filed. Without this step, every probe's output reaches ADO and re-introduces the noise the user disabled the skill to remove.

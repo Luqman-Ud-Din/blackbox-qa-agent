@@ -71,6 +71,16 @@ mcp__{serverName}__browser_resize(viewport.width, viewport.height)   // e.g. 128
 LOG: "[worker] device emulation active: {viewport.name} — skipping browser_resize"
 ```
 
+**Then install the console-error collector ONCE (for `qa-detect-console-errors`, Step 7c).** `addInitScript` re-runs on EVERY navigation, so a single install at worker start catches load-time unhandled rejections + CSP violations on every cell (a per-cell `browser_evaluate` injection would miss errors that fire during load). Idempotent — safe even if re-run:
+```
+mcp__{serverName}__browser_run_code_unsafe({ code: `await page.addInitScript(() => {
+  if (window.__argusErr) return; var s = window.__argusErr = []; function p(o){ if(s.length<200) s.push(o); }
+  addEventListener('unhandledrejection', function(e){ var r=e&&e.reason; p({source:'',kind:(r&&r.name)||'PromiseRejection',text:'Uncaught (in promise) '+((r&&r.message)||(typeof r==='string'?r:''))}); });
+  addEventListener('error', function(e){ if(e&&e.error) p({source:e.filename||'',kind:(e.error&&e.error.name)||'Error',text:e.message||String(e.error)}); });
+  document.addEventListener('securitypolicyviolation', function(e){ p({source:e.sourceFile||'',kind:'CSPViolation',text:e.violatedDirective+' blocked '+(e.blockedURI||'inline')}); });
+}) `})
+```
+
 Do NOT log in yet. Phase 1 cells must be captured in an unauthenticated state first.
 
 ### Step 2 — Load the SLIM skill list FIRST (NOT the 271KB bundle), then process cells in phase order
@@ -326,6 +336,63 @@ For each `cell` in ordered phase batch (all browser calls prefixed `mcp__{server
      "qa-detect-reflow": {"ran":true,"interacted":true,"findings":1}, ... }
    ```
    `scripts/coverage-gate.cjs` reads this: an interactive skill whose key is present = ran (covered); absent = never driven → re-dispatched. Every interactive skill applicable to this cell MUST have a key here, just as every passive skill must have a key in `{cell.id}-probes.json`. Together the two receipts prove all 92 skills were executed on this cell.
+
+7c. **🚨 CONSOLE + NETWORK RUNTIME ERRORS (MANDATORY — these 2 skills are NOT in the inject bundle, so the in-page batch CANNOT produce them; you MUST drive them here via MCP or they are missed on every cell).** `qa-detect-console-errors` and `qa-detect-network-errors` need real Playwright listeners. Run them per cell AFTER the interactive phase (errors fire on load AND on interaction):
+
+   **A. Console errors** — read BOTH sources and merge:
+   ```
+   consoleMsgs = mcp__{serverName}__browser_console_messages({ onlyErrors: true })   // Playwright-captured console.error + pageerror (uncaught), incl. load-time
+   injected    = mcp__{serverName}__browser_evaluate("() => window.__argusErr || []") // rejections + CSP from the Step 1 addInitScript collector
+   ```
+   Merge the two arrays. For each entry, classify by `kind`/`text` and attribute origin:
+   - `kind === 'CSPViolation'` (or text has `securitypolicyviolation`) → **CSPViolation**
+   - text matches `/Uncaught \(in promise\)/` OR `kind === 'PromiseRejection'` → **PromiseRejection**
+   - else first `\b(TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError)\b` in the text → that kind
+   - else → **ConsoleError**
+   - **third-party** = the message's source URL host ≠ the page host (`new URL(baseUrl).host`); e.g. analytics / CDN / `chrome-extension://`. first-party = same host or no host.
+
+   Map → issueType + severity, then **bucket by issueType (ONE finding per issueType, count + up to 3 sample messages in the description — never one ticket per duplicate):**
+   | condition | issueType | severity |
+   |---|---|---|
+   | any third-party origin | `thirdPartyError` | low |
+   | CSPViolation (first-party) | `cspViolation` | medium |
+   | PromiseRejection (first-party) | `unhandledRejection` | high |
+   | TypeError/ReferenceError/… (first-party) | `uncaughtException` | high |
+   | other console.error (first-party) | `consoleError` | high |
+
+   Finding shape: `{ issueType, severity, selector:null, evidenceType:"console", description:"{n} {issueType} on {route}: [{kind}] {firstMsg} (+{n-1} more)" }`. Emit NOTHING if there were no error messages.
+
+   **B. Network errors** — read the request log:
+   ```
+   reqs = mcp__{serverName}__browser_network_requests()
+   ```
+   For each entry: response `status >= 500` → `httpError` (**critical**); `status >= 400` → `httpError` (**high**); a failed request (no response / `requestfailed`) → `requestFailed` (**high**). Dedup by `url`+`status`. Skip same-status noise from third-party beacons if obviously analytics. Finding shape: `{ issueType, severity, selector:null, description:"HTTP {status} response for: {url}" }` or `"Request failed ({failure}): {url}"`.
+
+   **C. Write + receipt (CRITICAL for coverage):** append A+B findings to the cell JSONL in step 8, AND **merge the two skill keys into the existing `{cell.id}-probes.json`** (re-read it, add `"qa-detect-console-errors"` and `"qa-detect-network-errors"` keys set to their findings array — or `[]` when clean — then re-write). Without these keys, `coverage-gate.cjs` treats both skills as never-run and the gate stays INCOMPLETE. A clean page legitimately yields `[]` for both — that still counts as covered.
+
+7d. **🚨 REMAINING NON-INJECT SKILLS (MANDATORY for full 80/80 coverage — drive ONLY on the gated viewport so cost stays bounded; each one is `viewportSensitive:false` → run once per route on its leader cell, NOT on all 4).** All of these are absent from the inject bundle, so the in-page batch cannot produce them. Gate by `cell.viewportClass`:
+
+   **— On the `mobile` cell ONLY (route leader for `viewportSensitive:false` skills):**
+
+   • **qa-detect-orientation-flip** (issueTypes: `landscapeOverflow`, `landscapeContentHidden`, `orientationLosesState`, `orientationNoHandler`): record `{w,h}`; `browser_resize(h, w)` (swap to landscape); `browser_evaluate(() => window.__ARGUS_PROBES.runPassive("mobile",{route}))` and keep only NEW `horizontalOverflow`/clipped results not present in portrait → emit as `landscapeOverflow` / `landscapeContentHidden` (medium); `browser_resize(w, h)` to restore. Interactive receipt key.
+
+   • **qa-detect-fluid-sweep** (issueType: `fluidLayoutBreak`): for `w in [320,600,900,1100,1440,1920]`: `browser_resize(w, currentH)` → `browser_evaluate` the overflow check `(() => { const de=document.documentElement; return de.scrollWidth > de.clientWidth + 2; })`. For any width that overflows (especially the in-between 600/900/1100), emit ONE `fluidLayoutBreak` (medium) `"horizontal overflow at {w}px (between standard breakpoints)"`. Restore original width. Interactive receipt key.
+
+   • **qa-detect-content-patterns** (passive; issueTypes incl. `encodingMojibake`, `untranslatedKey`, `htmlEntityLiteral`, `markdownLiteral`, `commonTypo`): run ONE deterministic in-page scan — `browser_evaluate` over visible text nodes for: `�`/mojibake → `encodingMojibake`; a bare i18n key pattern `^[a-z][\w]*\.[\w.]+$` rendered as text → `untranslatedKey`; literal `&amp;`/`&lt;`/`&nbsp;` shown on screen → `htmlEntityLiteral`; literal `**bold**` / `__` markdown → `markdownLiteral`; `lorem ipsum` / `TODO`/`FIXME` → the skill's leak issueType. Emit verbatim, one finding per distinct issueType (count + sample). This is pure pattern-match — do NOT judge style. Passive receipt key (merge into `{cell.id}-probes.json`).
+
+   • **qa-review-content** (Sonnet — YOU are a Sonnet worker, so review directly; issueTypes: `spellingError`, `grammarError`, `wordChoice`, `awkwardPhrasing`, `capitalizationInconsistency`, `punctuationError`): `browser_evaluate(() => document.body.innerText.slice(0,4000))`. Flag ONLY unambiguous errors; SKIP any token in `resolvedConfig.content.proper_nouns`; if uncertain, skip. One finding per distinct error with the exact snippet — **never invent**. Interactive receipt key.
+
+   • **qa-review-hidden-text** (Sonnet; same issueTypes, but for non-visible text): `browser_evaluate` collecting all `alt` / `title` / `placeholder` / `aria-label` / `<option>` text. Apply the SAME strict spell/grammar check (proper-noun-aware, no invention). Interactive receipt key.
+
+   **— On the `laptop` cell ONLY:**
+
+   • **qa-test-cases** (applyOn `[laptop]`): if `{project-root}/.claude/qa-test-cases.md` does NOT exist → interactive receipt key `{"ran":true,"interacted":false,"skipReason":"no qa-test-cases.md defined"}` (a legit precondition-absent skip). If it exists, drive each listed scenario via MCP and emit pass/fail.
+
+   **— On the `mobile` AND `tablet` cells (viewport-parity needs cross-cell data):**
+
+   • **qa-detect-viewport-parity**: it compares desktop-vs-mobile feature sets, which one cell cannot do. Dump a feature fingerprint to `{project-root}/.tmp/{runId}/issues/{cell.id}-parity.json`: `{ route: "{cell.route}", viewportClass, navItems: <count of visible nav links>, tableCols: <max visible table header cells>, actionButtons: <count of visible buttons in toolbars/rows> }` (one `browser_evaluate`). Mark the interactive receipt key `{"ran":true,"interacted":true,"skipReason":"cross-viewport — compared by scripts/check-viewport-parity.cjs post-pass"}`. The orchestrator's post-pass reads all `*-parity.json`, compares the desktop/laptop fingerprint to mobile, and emits `featureDroppedOnMobile` where a column/action present on desktop is absent on mobile.
+
+   On tablet/laptop/desktop cells NOT listed above, these skills are correctly **not applicable** (their leader is another viewport) — do nothing and do not add their keys; the gate does not expect them there.
 
 8. Write findings to `{project-root}/.tmp/{runId}/issues/{cell.id}.jsonl` (one JSON object per line).
 
